@@ -62,7 +62,7 @@ federatedRequestSuccess :: TestTree
 federatedRequestSuccess =
   testCase "should successfully return success response" $
     runM . evalMock @Remote @IO $ do
-      mockDiscoverAndCallReturns @IO (const $ pure (Right (GRpcOk (InwardResponseBody "success!"))))
+      mockDiscoverAndCallReturns @IO (const $ pure (GRpcOk (InwardResponseBody "success!")))
       let federatedRequest = FederatedRequest validDomainText (Just validLocalPart)
 
       res <- mock @Remote @IO . Polysemy.runReader allowAllSettings $ callOutward federatedRequest
@@ -78,7 +78,7 @@ federatedRequestFailureTMC :: TestTree
 federatedRequestFailureTMC =
   testCase "should respond with error when facing GRpcTooMuchConcurrency" $
     runM . evalMock @Remote @IO $ do
-      mockDiscoverAndCallReturns @IO (const $ pure (Right (GRpcTooMuchConcurrency (TooMuchConcurrency 2))))
+      mockDiscoverAndCallReturns @IO (const $ pure (GRpcTooMuchConcurrency (TooMuchConcurrency 2)))
       let federatedRequest = FederatedRequest validDomainText (Just validLocalPart)
 
       res <- mock @Remote @IO . Polysemy.runReader allowAllSettings $ callOutward federatedRequest
@@ -93,7 +93,7 @@ federatedRequestFailureErrCode :: TestTree
 federatedRequestFailureErrCode =
   testCase "should respond with error when facing GRpcErrorCode" $
     runM . evalMock @Remote @IO $ do
-      mockDiscoverAndCallReturns @IO (const $ pure (Right (GRpcErrorCode 77))) -- TODO: Maybe use some legit HTTP2 error code?
+      mockDiscoverAndCallReturns @IO (const $ pure (GRpcErrorCode 77)) -- TODO: Maybe use some legit HTTP2 error code?
       let federatedRequest = FederatedRequest validDomainText (Just validLocalPart)
 
       res <- mock @Remote @IO . Polysemy.runReader allowAllSettings $ callOutward federatedRequest
@@ -108,7 +108,7 @@ federatedRequestFailureErrStr :: TestTree
 federatedRequestFailureErrStr =
   testCase "should respond with error when facing GRpcErrorString" $
     runM . evalMock @Remote @IO $ do
-      mockDiscoverAndCallReturns @IO (const $ pure (Right (GRpcErrorString "some grpc error")))
+      mockDiscoverAndCallReturns @IO (const $ pure (GRpcErrorString "some grpc error"))
       let federatedRequest = FederatedRequest validDomainText (Just validLocalPart)
 
       res <- mock @Remote @IO . Polysemy.runReader allowAllSettings $ callOutward federatedRequest

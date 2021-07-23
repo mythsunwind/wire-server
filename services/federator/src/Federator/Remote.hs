@@ -51,31 +51,63 @@ data RemoteError
   | RemoteErrorTLSException SrvTarget TLSException
   deriving (Show, Eq)
 
+remoteErrorGetTarget :: RemoteError -> Maybe SrvTarget
+remoteErrorGetTarget (RemoteErrorDiscoveryFailure _ _) = Nothing
+remoteErrorGetTarget (RemoteErrorClientFailure target _) = Just target
+remoteErrorGetTarget (RemoteErrorTLSException target _) = Just target
+
+logRemoteError :: RemoteError -> Log.Msg -> Log.Msg
+logRemoteError (RemoteErrorDiscoveryFailure domain err) =
+  Log.field "domain" (domainText domain)
+    . Log.field "error" (show err)
+logRemoteError (RemoteErrorClientFailure (SrvTarget host port) err) =
+  Log.field "host" host
+    . Log.field "port" port
+    . Log.field "error" (show err)
+logRemoteError (RemoteErrorTLSException (SrvTarget host port) err) =
+  Log.field "host" host
+    . Log.field "port" port
+    . Log.field "error" (show err)
+
 data Remote m a where
-  DiscoverAndCall :: ValidatedFederatedRequest -> Remote m (Either RemoteError (GRpcReply InwardResponse))
+  DiscoverAndCall :: ValidatedFederatedRequest -> Remote m (GRpcReply InwardResponse)
 
 makeSem ''Remote
 
 interpretRemote ::
-  (Members [Embed IO, DiscoverFederator, TinyLog, Polysemy.Reader RunSettings, Polysemy.Reader CertificateStore] r) =>
+  ( Members
+      '[ Embed IO,
+         DiscoverFederator,
+         TinyLog,
+         Polysemy.Reader RunSettings,
+         Polysemy.Reader CertificateStore,
+         Polysemy.Error RemoteError
+       ]
+      r
+  ) =>
   Sem (Remote ': r) a ->
   Sem r a
 interpretRemote = interpret $ \case
   DiscoverAndCall ValidatedFederatedRequest {..} -> do
-    eitherTarget <- discoverFederator vDomain
-    case eitherTarget of
-      Left err -> do
-        Log.debug $
-          Log.msg ("Failed to find remote federator" :: ByteString)
-            . Log.field "domain" (domainText vDomain)
-            . Log.field "error" (show err)
-        pure $ Left (RemoteErrorDiscoveryFailure vDomain err)
-      Right target -> do
-        eitherClient <- mkGrpcClient target
-        case eitherClient of
-          Right client ->
-            Right <$> callInward client vRequest
-          Left err -> pure $ Left err
+    target <- discoverFederator vDomain
+    client <- mkGrpcClient target
+    callInward client vRequest
+
+handleLookupErrors ::
+  Members '[Polysemy.Error RemoteError] r =>
+  Sem (Polysemy.Error (Domain, LookupError) ': r) a ->
+  Sem r a
+handleLookupErrors = Polysemy.mapError (uncurry RemoteErrorDiscoveryFailure)
+
+logRemoteErrors ::
+  Members '[TinyLog, Polysemy.Error RemoteError] r =>
+  Sem r a ->
+  Sem r a
+logRemoteErrors action = Polysemy.catch action $ \err -> do
+  Log.debug $
+    Log.msg ("Failed to connect to remote federator" :: ByteString)
+      . logRemoteError err
+  Polysemy.throw err
 
 callInward :: MonadIO m => GrpcClient -> Request -> m (GRpcReply InwardResponse)
 callInward client request =
@@ -88,10 +120,15 @@ callInward client request =
 --   See also https://github.com/lucasdicioccio/http2-client/issues/76
 -- FUTUREWORK(federation): Cache this client and use it for many requests
 mkGrpcClient ::
-  Members '[Embed IO, TinyLog, Polysemy.Reader CertificateStore] r =>
+  Members
+    '[ Embed IO,
+       Polysemy.Reader CertificateStore,
+       Polysemy.Error RemoteError
+     ]
+    r =>
   SrvTarget ->
-  Sem r (Either RemoteError GrpcClient)
-mkGrpcClient target@(SrvTarget host port) = logAndReturn target $ do
+  Sem r GrpcClient
+mkGrpcClient target@(SrvTarget host port) = do
   -- grpcClientConfigSimple using TLS is INSECURE and IGNORES any certificates
   -- See https://github.com/haskell-grpc-native/http2-grpc-haskell/issues/47
   --
@@ -148,17 +185,3 @@ mkGrpcClient target@(SrvTarget host port) = logAndReturn target $ do
   Polysemy.mapError (RemoteErrorClientFailure target)
     . Polysemy.fromEither
     =<< Polysemy.fromExceptionVia (RemoteErrorTLSException target) (createGrpcClient cfg')
-
-logAndReturn :: Members '[TinyLog] r => SrvTarget -> Sem (Polysemy.Error RemoteError ': r) a -> Sem r (Either RemoteError a)
-logAndReturn (SrvTarget host port) action = do
-  eitherClient <- Polysemy.runError action
-  case eitherClient of
-    Left err -> do
-      Log.debug $
-        Log.msg ("Failed to connect to remote federator" :: ByteString)
-          . Log.field "host" host
-          . Log.field "port" port
-          . Log.field "error" (show err)
-      pure ()
-    _ -> pure ()
-  pure eitherClient

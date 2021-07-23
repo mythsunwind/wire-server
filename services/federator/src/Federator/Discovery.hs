@@ -23,6 +23,7 @@ import Data.String.Conversions (cs)
 import Imports
 import qualified Network.DNS as DNS
 import Polysemy
+import qualified Polysemy.Error as Polysemy
 import Polysemy.TinyLog (TinyLog)
 import qualified Polysemy.TinyLog as TinyLog
 import qualified System.Logger.Class as Log
@@ -36,18 +37,24 @@ data LookupError
   deriving (Show, Eq)
 
 data DiscoverFederator m a where
-  DiscoverFederator :: Domain -> DiscoverFederator m (Either LookupError SrvTarget)
+  DiscoverFederator :: Domain -> DiscoverFederator m SrvTarget
 
 makeSem ''DiscoverFederator
 
-runFederatorDiscovery :: Members '[DNSLookup, TinyLog] r => Sem (DiscoverFederator ': r) a -> Sem r a
+runFederatorDiscovery ::
+  Members '[DNSLookup, TinyLog, Polysemy.Error (Domain, LookupError)] r =>
+  Sem (DiscoverFederator ': r) a ->
+  Sem r a
 runFederatorDiscovery = interpret $ \(DiscoverFederator d) ->
-  -- FUTUREWORK(federation): This string conversation is probably wrong, we should encode this
+  -- FUTUREWORK(federation): This string conversion is probably wrong, we should encode this
   -- using IDNA encoding or expect domain to be bytestring everywhere
   let domainSrv = cs $ "_wire-server-federator._tcp." <> domainText d
-   in lookupDomainByDNS domainSrv
+   in Polysemy.mapError @LookupError (d,) (lookupDomainByDNS domainSrv)
 
-lookupDomainByDNS :: Members '[DNSLookup, TinyLog] r => ByteString -> Sem r (Either LookupError SrvTarget)
+lookupDomainByDNS ::
+  Members '[DNSLookup, TinyLog, Polysemy.Error LookupError] r =>
+  ByteString ->
+  Sem r SrvTarget
 lookupDomainByDNS domainSrv = do
   res <- Lookup.lookupSRV domainSrv
   case res of
@@ -55,10 +62,10 @@ lookupDomainByDNS domainSrv = do
       -- FUTUREWORK(federation): orderSrvResult and try the list in order this will make it
       -- not federator specific and then we can move this whole function to
       -- dns-util
-      pure $ Right $ srvTarget $ NonEmpty.head entries
-    SrvNotAvailable -> pure $ Left $ LookupErrorSrvNotAvailable domainSrv
+      pure $ srvTarget $ NonEmpty.head entries
+    SrvNotAvailable -> Polysemy.throw $ LookupErrorSrvNotAvailable domainSrv
     -- Name error also means that the record is not available
-    SrvResponseError DNS.NameError -> pure $ Left $ LookupErrorSrvNotAvailable domainSrv
+    SrvResponseError DNS.NameError -> Polysemy.throw $ LookupErrorSrvNotAvailable domainSrv
     SrvResponseError err -> do
       TinyLog.err $ Log.msg ("DNS Lookup failed" :: ByteString) . Log.field "error" (show err)
-      pure $ Left $ LookupErrorDNSError domainSrv
+      Polysemy.throw $ LookupErrorDNSError domainSrv
