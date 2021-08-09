@@ -126,15 +126,7 @@ data ConnectionError
   | -- | An attempt at creating a connection from an account with
     -- no verified user identity.
     ConnectNoIdentity
-  | -- | An attempt at creating an invitation to a blacklisted email.
-    ConnectBlacklistedEmail
-  | -- | An attempt at creating an invitation to a blacklisted phone.
-    ConnectBlacklistedPhone
-  | -- | An attempt at creating an invitation to an invalid email address.
-    ConnectInvalidEmail
   | -- | An attempt at creating an invitation to an invalid phone nbumber.
-    ConnectInvalidPhone
-  | -- | An attempt at creating a connection with another user from the same binding team.
     ConnectSameBindingTeamUsers
   | -- | Something doesn't work because somebody has a LH device and somebody else has not granted consent.
     ConnectMissingLegalholdConsent

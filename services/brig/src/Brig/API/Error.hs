@@ -90,10 +90,6 @@ connError InvalidTransition = StdError invalidTransition
 connError NotConnected = StdError (errorDescriptionToWai notConnected)
 connError InvalidUser = StdError invalidUser
 connError ConnectNoIdentity = StdError (noIdentity 0)
-connError ConnectBlacklistedEmail = StdError blacklistedEmail
-connError ConnectBlacklistedPhone = StdError blacklistedPhone
-connError ConnectInvalidEmail = StdError invalidEmail
-connError ConnectInvalidPhone = StdError invalidPhone
 connError ConnectSameBindingTeamUsers = StdError sameBindingTeamUsers
 connError ConnectMissingLegalholdConsent =
   StdError (errorDescriptionToWai missingLegalholdConsent)
