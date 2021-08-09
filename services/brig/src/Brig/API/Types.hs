@@ -116,22 +116,24 @@ data InvitationError
 data ConnectionError
   = -- | Max. # of 'Accepted' / 'Sent' connections reached
     -- when attempting to create or accept a connection.
-    TooManyConnections UserId
+    TooManyConnections
   | -- | An invalid connection status change.
-    InvalidTransition UserId Relation
+    InvalidTransition
   | -- | The target user in an connection attempt is invalid, e.g. not activated.
-    InvalidUser UserId
+    InvalidUser
   | -- | An attempt at updating a non-existent connection.
-    NotConnected UserId UserId
+    NotConnected
   | -- | An attempt at creating a connection from an account with
     -- no verified user identity.
     ConnectNoIdentity
-  | -- | An attempt at creating an invitation to a blacklisted user key.
-    ConnectBlacklistedUserKey UserKey
+  | -- | An attempt at creating an invitation to a blacklisted email.
+    ConnectBlacklistedEmail
+  | -- | An attempt at creating an invitation to a blacklisted phone.
+    ConnectBlacklistedPhone
   | -- | An attempt at creating an invitation to an invalid email address.
-    ConnectInvalidEmail Email String
+    ConnectInvalidEmail
   | -- | An attempt at creating an invitation to an invalid phone nbumber.
-    ConnectInvalidPhone Phone
+    ConnectInvalidPhone
   | -- | An attempt at creating a connection with another user from the same binding team.
     ConnectSameBindingTeamUsers
   | -- | Something doesn't work because somebody has a LH device and somebody else has not granted consent.

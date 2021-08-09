@@ -80,15 +80,13 @@ createConnectionToLocalUser ::
   ExceptT ConnectionError AppIO ConnectionResult
 createConnectionToLocalUser self crUser ConnectionRequest {crName, crMessage} conn = do
   when (self == crUser) $
-    throwE $
-      InvalidUser crUser
+    throwE InvalidUser
   selfActive <- lift $ Data.isActivated self
   unless selfActive $
     throwE ConnectNoIdentity
   otherActive <- lift $ Data.isActivated crUser
   unless otherActive $
-    throwE $
-      InvalidUser crUser
+    throwE InvalidUser
   checkLegalholdPolicyConflict self crUser
   -- Users belonging to the same team are always treated as connected, so creating a
   -- connection between them is useless. {#RefConnectionTeam}
@@ -118,12 +116,12 @@ createConnectionToLocalUser self crUser ConnectionRequest {crName, crMessage} co
 
     update :: UserConnection -> UserConnection -> ExceptT ConnectionError AppIO ConnectionResult
     update s2o o2s = case (ucStatus s2o, ucStatus o2s) of
-      (MissingLegalholdConsent, _) -> throwE $ InvalidTransition self Sent
-      (_, MissingLegalholdConsent) -> throwE $ InvalidTransition self Sent
+      (MissingLegalholdConsent, _) -> throwE InvalidTransition
+      (_, MissingLegalholdConsent) -> throwE InvalidTransition
       (Accepted, Accepted) -> return $ ConnectionExists s2o
       (Accepted, Blocked) -> return $ ConnectionExists s2o
       (Sent, Blocked) -> return $ ConnectionExists s2o
-      (Blocked, _) -> throwE $ InvalidTransition self Sent
+      (Blocked, _) -> throwE InvalidTransition
       (_, Blocked) -> change s2o SentWithHistory
       (_, Sent) -> accept s2o o2s
       (_, Accepted) -> accept s2o o2s
@@ -215,9 +213,9 @@ updateConnection self other newStatus conn = do
   o2s <- connection other self
   s2o' <- case (ucStatus s2o, ucStatus o2s, newStatus) of
     -- missing legalhold consent: call 'updateConectionInternal' instead.
-    (MissingLegalholdConsent, _, _) -> throwE $ InvalidTransition self newStatus
-    (_, MissingLegalholdConsent, _) -> throwE $ InvalidTransition self newStatus
-    (_, _, MissingLegalholdConsent) -> throwE $ InvalidTransition self newStatus
+    (MissingLegalholdConsent, _, _) -> throwE InvalidTransition
+    (_, MissingLegalholdConsent, _) -> throwE InvalidTransition
+    (_, _, MissingLegalholdConsent) -> throwE InvalidTransition
     -- Pending -> {Blocked, Ignored, Accepted}
     (Pending, _, Blocked) -> block s2o
     (Pending, _, Ignored) -> change s2o Ignored
@@ -253,7 +251,7 @@ updateConnection self other newStatus conn = do
     -- no change
     (old, _, new) | old == new -> return Nothing
     -- invalid
-    _ -> throwE $ InvalidTransition self newStatus
+    _ -> throwE InvalidTransition
   lift . for_ s2o' $ \c ->
     let e2s = ConnectionUpdated c (Just $ ucStatus s2o) Nothing
      in Intra.onConnectionEvent self conn e2s
@@ -323,7 +321,7 @@ updateConnection self other newStatus conn = do
       lift $ Just <$> Data.updateConnection c (mkRelationWithHistory (error "impossible") s)
 
 connection :: UserId -> UserId -> ExceptT ConnectionError AppIO UserConnection
-connection a b = lift (Data.lookupConnection a b) >>= tryJust (NotConnected a b)
+connection a b = lift (Data.lookupConnection a b) >>= tryJust NotConnected
 
 mkRelationWithHistory :: HasCallStack => Relation -> Relation -> RelationWithHistory
 mkRelationWithHistory oldRel = \case
@@ -401,7 +399,7 @@ updateConnectionInternal = \case
           lift $ Intra.onConnectionEvent (ucFrom uconn) Nothing connEvent
 
     relationWithHistory :: UserId -> UserId -> ExceptT ConnectionError AppIO RelationWithHistory
-    relationWithHistory a b = lift (Data.lookupRelationWithHistory a b) >>= tryJust (NotConnected a b)
+    relationWithHistory a b = lift (Data.lookupRelationWithHistory a b) >>= tryJust NotConnected
 
     undoRelationHistory :: RelationWithHistory -> RelationWithHistory
     undoRelationHistory = \case
@@ -477,5 +475,4 @@ checkLimit u = do
   n <- lift $ Data.countConnections u [Accepted, Sent]
   l <- setUserMaxConnections <$> view settings
   unless (n < l) $
-    throwE $
-      TooManyConnections u
+    throwE TooManyConnections
