@@ -193,14 +193,13 @@ instance
   where
   responseSwagger =
     pure $
-      ResponseSwagger
-        { rsDescription =
-            Text.pack (symbolVal (Proxy @desc)) <> "\n\n"
-              <> "**Note**: This error has an empty body for legacy reasons",
-          rsStatus = statusVal (Proxy @s),
-          rsHeaders = mempty,
-          rsSchema = Nothing
-        }
+      genericResponseSwagger
+        (statusVal (Proxy @s))
+        ( Text.pack (symbolVal (Proxy @desc)) <> "\n\n"
+            <> "**Note**: This error has an empty body for legacy reasons"
+        )
+        mempty
+        Nothing
 
 instance
   ( ResponseType r ~ a,
@@ -305,7 +304,7 @@ type MissingLegalholdConsent =
     403
     "missing-legalhold-consent"
     "Failed to connect to a user or to invite a user to a group because somebody \
-    \is under legalhold and somebody else has not granted consent."
+    \is under legalhold and somebody else has not granted consent"
 
 missingLegalholdConsent :: MissingLegalholdConsent
 missingLegalholdConsent = mkErrorDescription

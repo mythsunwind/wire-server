@@ -36,6 +36,7 @@ module Wire.API.Routes.MultiVerb
     roAddContentType,
     roResponse,
     ResponseSwagger (..),
+    genericResponseSwagger,
     ResponseTypes,
     IsResponseList (..),
   )
@@ -83,11 +84,44 @@ data Respond (s :: Nat) (desc :: Symbol) (a :: *)
 data RespondEmpty (s :: Nat) (desc :: Symbol)
 
 data ResponseSwagger = ResponseSwagger
-  { rsDescription :: Text,
-    rsStatus :: Status,
-    rsHeaders :: InsOrdHashMap S.HeaderName S.Header,
-    rsSchema :: Maybe (S.Referenced S.Schema)
+  { rsStatus :: Status,
+    rsCombine :: Maybe (S.Referenced S.Response) -> Maybe (S.Referenced S.Response)
   }
+
+genericResponseSwaggerCombine ::
+  Text ->
+  InsOrdHashMap S.HeaderName S.Header ->
+  Maybe (S.Referenced S.Schema) ->
+  Maybe (S.Referenced S.Response) ->
+  Maybe (S.Referenced S.Response)
+genericResponseSwaggerCombine desc headers sch Nothing =
+  Just . S.Inline $
+    mempty
+      & S.description .~ desc
+      & S.schema .~ sch
+      & S.headers .~ headers
+genericResponseSwaggerCombine desc _ sch (Just resp) =
+  -- FUTUREWORK: with openapi 3, combine schemas using oneOf
+  -- FUTUREWORK: how to combine headers?
+  Just $
+    resp
+      & S._Inline . S.description %~ (<> ("\n\n" <> desc))
+      & S._Inline . S.schema %~ combineSchema sch
+  where
+    combineSchema sch1 Nothing = sch1
+    combineSchema _ sch2 = sch2
+
+genericResponseSwagger ::
+  Status ->
+  Text ->
+  InsOrdHashMap S.HeaderName S.Header ->
+  Maybe (S.Referenced S.Schema) ->
+  ResponseSwagger
+genericResponseSwagger status desc headers sch =
+  ResponseSwagger
+    { rsStatus = status,
+      rsCombine = genericResponseSwaggerCombine desc headers sch
+    }
 
 data RenderOutput = RenderOutput
   { roStatus :: Status,
@@ -174,7 +208,7 @@ instance
   IsSwaggerResponse (Respond s desc a)
   where
   responseSwagger =
-    ResponseSwagger desc status mempty . Just
+    genericResponseSwagger status desc mempty . Just
       <$> S.declareSchemaRef (Proxy @a)
     where
       desc = Text.pack (symbolVal (Proxy @desc))
@@ -200,7 +234,7 @@ instance KnownStatus s => IsResponse cs (RespondEmpty s desc) where
       )
 
 instance (KnownStatus s, KnownSymbol desc) => IsSwaggerResponse (RespondEmpty s desc) where
-  responseSwagger = pure $ ResponseSwagger desc status mempty Nothing
+  responseSwagger = pure $ genericResponseSwagger status desc mempty Nothing
     where
       desc = Text.pack (symbolVal (Proxy @desc))
       status = statusVal (Proxy @s)
@@ -281,7 +315,14 @@ instance
   where
   responseSwagger =
     fmap
-      (\rs -> rs {rsHeaders = toAllResponseHeaders (Proxy @hs)})
+      ( \rs ->
+          rs
+            { rsCombine = \resp ->
+                rsCombine rs resp
+                  & _Just . S._Inline . S.headers
+                    .~ toAllResponseHeaders (Proxy @hs)
+            }
+      )
       (responseSwagger @r)
 
 class IsSwaggerResponseList as where
@@ -531,15 +572,11 @@ instance
       method = S.swaggerMethod (Proxy @method)
       cs = allMime (Proxy @cs)
       (defs, responses) = S.runDeclare (responseListSwagger @as) mempty
+
       addResponse :: ResponseSwagger -> S.Responses -> S.Responses
       addResponse response =
         at (statusCode (rsStatus response))
-          .~ (Just . S.Inline)
-            ( mempty
-                & S.description .~ rsDescription response
-                & S.schema .~ rsSchema response
-                & S.headers .~ rsHeaders response
-            )
+          %~ rsCombine response
 
 roResponse :: RenderOutput -> Wai.Response
 roResponse ro = Wai.responseLBS (roStatus ro) (roHeaders ro) (roBody ro)
