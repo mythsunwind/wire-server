@@ -153,7 +153,6 @@ import Galley.Data.Instances ()
 import Galley.Data.LegalHold (isTeamLegalholdWhitelisted)
 import qualified Galley.Data.Queries as Cql
 import Galley.Data.Types as Data
-import Galley.Effects
 import Galley.Types hiding (Conversation)
 import Galley.Types.Bot (newServiceRef)
 import Galley.Types.Clients (Clients)
@@ -336,13 +335,18 @@ userTeams u =
   map runIdentity
     <$> retry x1 (query Cql.selectUserTeams (params Quorum (Identity u)))
 
-usersTeams :: Member Concurrency r => [UserId] -> Galley r (Map UserId TeamId)
-usersTeams uids = do
-  pairs :: [(UserId, TeamId)] <- catMaybes <$> pooledMapConcurrentlyN 8 (\uid -> (uid,) <$$> oneUserTeam uid) uids
+usersTeams :: [UserId] -> Galley r (Map UserId TeamId)
+usersTeams uids = liftClient $ do
+  pairs :: [(UserId, TeamId)] <-
+    catMaybes
+      <$> UnliftIO.pooledMapConcurrentlyN 8 (\uid -> (uid,) <$$> oneUserTeamC uid) uids
   pure $ foldl' (\m (k, v) -> Map.insert k v m) Map.empty pairs
 
 oneUserTeam :: UserId -> Galley r (Maybe TeamId)
-oneUserTeam u =
+oneUserTeam = liftClient . oneUserTeamC
+
+oneUserTeamC :: UserId -> Client (Maybe TeamId)
+oneUserTeamC u =
   fmap runIdentity
     <$> retry x1 (query1 Cql.selectOneUserTeam (params Quorum (Identity u)))
 
@@ -494,31 +498,39 @@ isConvAlive cid = do
     Just (Just True) -> pure False
     Just (Just False) -> pure True
 
-conversation :: Member Concurrency r => ConvId -> Galley r (Maybe Conversation)
-conversation conv = do
-  cdata <- async $ retry x1 (query1 Cql.selectConv (params Quorum (Identity conv)))
-  remoteMems <- async $ lookupRemoteMembers conv
-  mbConv <- toConv conv <$> members conv <*> wait remoteMems <*> wait cdata
+conversation :: ConvId -> Galley r (Maybe Conversation)
+conversation conv = liftClient $ do
+  cdata <- UnliftIO.async $ retry x1 (query1 Cql.selectConv (params Quorum (Identity conv)))
+  remoteMems <- UnliftIO.async $ lookupRemoteMembersC conv
+  mbConv <-
+    toConv conv
+      <$> membersC conv
+      <*> UnliftIO.wait remoteMems
+      <*> UnliftIO.wait cdata
   return mbConv >>= conversationGC
 
 {- "Garbage collect" the conversation, i.e. the conversation may be
    marked as deleted, in which case we delete it and return Nothing -}
 conversationGC ::
   Maybe Conversation ->
-  Galley r (Maybe Conversation)
+  Client (Maybe Conversation)
 conversationGC conv = case join (convDeleted <$> conv) of
   (Just True) -> do
-    sequence_ $ deleteConversation . convId <$> conv
+    sequence_ $ deleteConversationC . convId <$> conv
     return Nothing
   _ -> return conv
 
-localConversations :: Member Concurrency r => [ConvId] -> Galley r [Conversation]
+localConversations :: [ConvId] -> Galley r [Conversation]
 localConversations [] = return []
 localConversations ids = do
-  convs <- async fetchConvs
-  mems <- async $ memberLists ids
-  remoteMems <- async $ remoteMemberLists ids
-  cs <- zipWith4 toConv ids <$> wait mems <*> wait remoteMems <*> wait convs
+  cs <- liftClient $ do
+    convs <- UnliftIO.async fetchConvs
+    mems <- UnliftIO.async $ memberLists ids
+    remoteMems <- UnliftIO.async $ remoteMemberLists ids
+    zipWith4 toConv ids
+      <$> UnliftIO.wait mems
+      <*> UnliftIO.wait remoteMems
+      <*> UnliftIO.wait convs
   foldrM flatten [] (zip ids cs)
   where
     fetchConvs = do
@@ -599,17 +611,17 @@ localConversationIdsOf usr cids = do
 -- | Takes a list of remote conversation ids and fetches member status flags
 -- for the given user
 remoteConversationStatus ::
-  Member Concurrency r =>
   UserId ->
   [Remote ConvId] ->
   Galley r (Map (Remote ConvId) MemberStatus)
 remoteConversationStatus uid =
-  fmap mconcat
-    . pooledMapConcurrentlyN 8 (remoteConversationStatusOnDomain uid)
+  liftClient
+    . fmap mconcat
+    . UnliftIO.pooledMapConcurrentlyN 8 (remoteConversationStatusOnDomainC uid)
     . bucketRemote
 
-remoteConversationStatusOnDomain :: Member Concurrency r => UserId -> Remote [ConvId] -> Galley r (Map (Remote ConvId) MemberStatus)
-remoteConversationStatusOnDomain uid rconvs =
+remoteConversationStatusOnDomainC :: UserId -> Remote [ConvId] -> Client (Map (Remote ConvId) MemberStatus)
+remoteConversationStatusOnDomainC uid rconvs =
   Map.fromList . map toPair
     <$> query Cql.selectRemoteConvMemberStatuses (params Quorum (uid, tDomain rconvs, tUnqualified rconvs))
   where
@@ -744,16 +756,19 @@ updateConversationMessageTimer :: ConvId -> Maybe Milliseconds -> Galley r ()
 updateConversationMessageTimer cid mtimer = retry x5 $ write Cql.updateConvMessageTimer (params Quorum (mtimer, cid))
 
 deleteConversation :: ConvId -> Galley r ()
-deleteConversation cid = do
+deleteConversation = liftClient . deleteConversationC
+
+deleteConversationC :: ConvId -> Client ()
+deleteConversationC cid = do
   retry x5 $ write Cql.markConvDeleted (params Quorum (Identity cid))
 
-  localMembers <- members cid
+  localMembers <- membersC cid
   for_ (nonEmpty localMembers) $ \ms ->
-    removeLocalMembersFromLocalConv cid (lmId <$> ms)
+    removeLocalMembersFromLocalConvC cid (lmId <$> ms)
 
-  remoteMembers <- lookupRemoteMembers cid
+  remoteMembers <- lookupRemoteMembersC cid
   for_ (nonEmpty remoteMembers) $ \ms ->
-    removeRemoteMembersFromLocalConv cid (rmId <$> ms)
+    removeRemoteMembersFromLocalConvC cid (rmId <$> ms)
 
   retry x5 $ write Cql.deleteConv (params Quorum (Identity cid))
 
@@ -854,9 +869,7 @@ member cnv usr =
   (toMember =<<)
     <$> retry x1 (query1 Cql.selectMember (params Quorum (cnv, usr)))
 
-remoteMemberLists ::
-  [ConvId] ->
-  Galley r [[RemoteMember]]
+remoteMemberLists :: [ConvId] -> Client [[RemoteMember]]
 remoteMemberLists convs = do
   mems <- retry x1 $ query Cql.selectRemoteMembers (params Quorum (Identity convs))
   let convMembers = foldr (insert . mkMem) Map.empty mems
@@ -870,9 +883,7 @@ remoteMemberLists convs = do
 toRemoteMember :: UserId -> Domain -> RoleName -> RemoteMember
 toRemoteMember u d = RemoteMember (toRemoteUnsafe d u)
 
-memberLists ::
-  [ConvId] ->
-  Galley r [[LocalMember]]
+memberLists :: [ConvId] -> Client [[LocalMember]]
 memberLists convs = do
   mems <- retry x1 $ query Cql.selectMembers (params Quorum (Identity convs))
   let convMembers = foldr (\m acc -> insert (mkMem m) acc) mempty mems
@@ -886,10 +897,16 @@ memberLists convs = do
       (cnv, toMember (usr, srv, prv, st, omus, omur, oar, oarr, hid, hidr, crn))
 
 members :: ConvId -> Galley r [LocalMember]
-members conv = join <$> memberLists [conv]
+members = liftClient . membersC
+
+membersC :: ConvId -> Client [LocalMember]
+membersC = fmap concat . liftClient . memberLists . pure
 
 lookupRemoteMembers :: ConvId -> Galley r [RemoteMember]
-lookupRemoteMembers conv = join <$> remoteMemberLists [conv]
+lookupRemoteMembers = liftClient . lookupRemoteMembersC
+
+lookupRemoteMembersC :: ConvId -> Client [RemoteMember]
+lookupRemoteMembersC conv = join <$> remoteMemberLists [conv]
 
 -- | Add a member to a local conversation, as an admin.
 addMember :: Local ConvId -> Local UserId -> Galley r [LocalMember]
@@ -1055,26 +1072,26 @@ updateOtherMemberRemoteConv _ _ _ = pure ()
 -- Return the filtered list and a boolean indicating whether the all the input
 -- users are members.
 filterRemoteConvMembers ::
-  Member Concurrency r =>
   [UserId] ->
   Qualified ConvId ->
   Galley r ([UserId], Bool)
 filterRemoteConvMembers users (Qualified conv dom) =
-  fmap Data.Monoid.getAll
-    . foldMap (\muser -> (muser, Data.Monoid.All (not (null muser))))
-    <$> pooledMapConcurrentlyN 8 filterMember users
+  liftClient $
+    fmap Data.Monoid.getAll
+      . foldMap (\muser -> (muser, Data.Monoid.All (not (null muser))))
+      <$> UnliftIO.pooledMapConcurrentlyN 8 filterMember users
   where
-    filterMember :: UserId -> Galley r [UserId]
+    filterMember :: UserId -> Client [UserId]
     filterMember user =
       fmap (map runIdentity)
         . retry x1
         $ query Cql.selectRemoteConvMembers (params Quorum (user, dom, conv))
 
-removeLocalMembersFromLocalConv ::
-  ConvId ->
-  NonEmpty UserId ->
-  Galley r ()
-removeLocalMembersFromLocalConv cnv victims = do
+removeLocalMembersFromLocalConv :: ConvId -> NonEmpty UserId -> Galley r ()
+removeLocalMembersFromLocalConv cnv = liftClient . removeLocalMembersFromLocalConvC cnv
+
+removeLocalMembersFromLocalConvC :: ConvId -> NonEmpty UserId -> Client ()
+removeLocalMembersFromLocalConvC cnv victims = do
   retry x5 . batch $ do
     setType BatchLogged
     setConsistency Quorum
@@ -1082,11 +1099,11 @@ removeLocalMembersFromLocalConv cnv victims = do
       addPrepQuery Cql.removeMember (cnv, victim)
       addPrepQuery Cql.deleteUserConv (victim, cnv)
 
-removeRemoteMembersFromLocalConv ::
-  ConvId ->
-  NonEmpty (Remote UserId) ->
-  Galley r ()
-removeRemoteMembersFromLocalConv cnv victims = do
+removeRemoteMembersFromLocalConv :: ConvId -> NonEmpty (Remote UserId) -> Galley r ()
+removeRemoteMembersFromLocalConv cnv = liftClient . removeRemoteMembersFromLocalConvC cnv
+
+removeRemoteMembersFromLocalConvC :: ConvId -> NonEmpty (Remote UserId) -> Client ()
+removeRemoteMembersFromLocalConvC cnv victims = do
   retry x5 . batch $ do
     setType BatchLogged
     setConsistency Quorum
