@@ -145,11 +145,11 @@ acceptConv usr conn cnv = do
   conv' <- acceptOne2One usr conv conn
   conversationView usr conv'
 
-blockConvH :: Member Concurrency r => UserId ::: ConvId -> Galley r Response
+blockConvH :: UserId ::: ConvId -> Galley r Response
 blockConvH (zusr ::: cnv) =
   empty <$ blockConv zusr cnv
 
-blockConv :: Member Concurrency r => UserId -> ConvId -> Galley r ()
+blockConv :: UserId -> ConvId -> Galley r ()
 blockConv zusr cnv = do
   conv <- Data.conversation cnv >>= ifNothing (errorDescriptionTypeToWai @ConvNotFound)
   unless (Data.convType conv `elem` [ConnectConv, One2OneConv]) $
@@ -220,7 +220,6 @@ updateLocalConversationAccess lcnv lusr con target =
     $ target
 
 updateRemoteConversationAccess ::
-  Member Concurrency r =>
   Remote ConvId ->
   Local UserId ->
   ConnId ->
@@ -333,7 +332,6 @@ updateLocalConversationReceiptMode lcnv lusr con update =
       ConversationActionReceiptModeUpdate update
 
 updateRemoteConversationReceiptMode ::
-  Member Concurrency r =>
   Remote ConvId ->
   Local UserId ->
   ConnId ->
@@ -527,11 +525,11 @@ rmCode usr zcon cnv = do
   pushConversationEvent (Just zcon) event (map lmId users) bots
   pure event
 
-getCodeH :: Member Concurrency r => UserId ::: ConvId -> Galley r Response
+getCodeH :: UserId ::: ConvId -> Galley r Response
 getCodeH (usr ::: cnv) =
   setStatus status200 . json <$> getCode usr cnv
 
-getCode :: Member Concurrency r => UserId -> ConvId -> Galley r Public.ConversationCode
+getCode :: UserId -> ConvId -> Galley r Public.ConversationCode
 getCode usr cnv = do
   conv <- Data.conversation cnv >>= ifNothing (errorDescriptionTypeToWai @ConvNotFound)
   ensureAccess conv CodeAccess
@@ -623,7 +621,6 @@ joinConversation zusr zcon cnv access = do
 -- | Add users to a conversation without performing any checks. Return extra
 -- notification targets and the action performed.
 addMembersToLocalConversation ::
-  Member Concurrency r =>
   Local ConvId ->
   UserList UserId ->
   RoleName ->
@@ -834,7 +831,6 @@ updateOtherMemberLocalConv lcnv lusr con qvictim update = void . getUpdateResult
     ConversationActionMemberUpdate qvictim update
 
 updateOtherMemberRemoteConv ::
-  Member Concurrency r =>
   Remote ConvId ->
   Local UserId ->
   ConnId ->
@@ -867,7 +863,6 @@ removeMemberQualified zusr con qcnv victim = do
   foldQualified lusr removeMemberFromLocalConv removeMemberFromRemoteConv qcnv lusr (Just con) victim
 
 removeMemberFromRemoteConv ::
-  Member Concurrency r =>
   Remote ConvId ->
   Local UserId ->
   Maybe ConnId ->
@@ -890,7 +885,6 @@ removeMemberFromRemoteConv (qUntagged -> qcnv) lusr _ victim
   | otherwise = pure . Left $ RemoveFromConversationErrorRemovalNotAllowed
 
 performRemoveMemberAction ::
-  Member Concurrency r =>
   Data.Conversation ->
   [Qualified UserId] ->
   MaybeT (Galley r) ()

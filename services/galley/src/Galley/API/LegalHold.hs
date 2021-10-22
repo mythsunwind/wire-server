@@ -458,7 +458,7 @@ changeLegalholdStatus tid uid old new = do
     illegal = throwM userLegalHoldIllegalOperation
 
 -- FUTUREWORK: make this async?
-blockNonConsentingConnections :: forall r. Member Concurrency r => UserId -> Galley r ()
+blockNonConsentingConnections :: UserId -> Galley r ()
 blockNonConsentingConnections uid = do
   conns <- getConnectionsUnqualified [uid] Nothing Nothing
   errmsgs <- do

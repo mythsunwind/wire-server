@@ -80,7 +80,11 @@ federationSitemap =
         FederationAPIGalley.sendMessage = sendMessage
       }
 
-onConversationCreated :: Member Concurrency r => Domain -> NewRemoteConversation ConvId -> Galley r ()
+onConversationCreated ::
+  Member Concurrency r =>
+  Domain ->
+  NewRemoteConversation ConvId ->
+  Galley r ()
 onConversationCreated domain rc = do
   let qrc = fmap (toRemoteUnsafe domain) rc
   loc <- qualifyLocal ()
@@ -115,7 +119,6 @@ onConversationCreated domain rc = do
     pushConversationEvent Nothing event [qUnqualified . Public.memId $ mem] []
 
 getConversations ::
-  Member Concurrency r =>
   Domain ->
   GetConversationsRequest ->
   Galley r GetConversationsResponse
@@ -131,7 +134,11 @@ getLocalUsers localDomain = map qUnqualified . filter ((== localDomain) . qDomai
 
 -- | Update the local database with information on conversation members joining
 -- or leaving. Finally, push out notifications to local users.
-onConversationUpdated :: Member Concurrency r => Domain -> ConversationUpdate -> Galley r ()
+onConversationUpdated ::
+  Member Concurrency r =>
+  Domain ->
+  ConversationUpdate ->
+  Galley r ()
 onConversationUpdated requestingDomain cu = do
   localDomain <- viewFederationDomain
   loc <- qualifyLocal ()

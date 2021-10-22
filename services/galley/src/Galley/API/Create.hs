@@ -97,7 +97,6 @@ internalCreateManagedConversation zusr zcon (NewConvManaged body) = do
     Just tinfo -> createTeamGroupConv zusr zcon tinfo body
 
 ensureNoLegalholdConflicts ::
-  Member Concurrency r =>
   [Remote UserId] ->
   [UserId] ->
   Galley r ()
@@ -191,7 +190,7 @@ createTeamGroupConv zusr zcon tinfo body = do
 ----------------------------------------------------------------------------
 -- Other kinds of conversations
 
-createSelfConversation :: Member Concurrency r => UserId -> Galley r ConversationResponse
+createSelfConversation :: UserId -> Galley r ConversationResponse
 createSelfConversation zusr = do
   lusr <- qualifyLocal zusr
   c <- Data.conversation (Id . toUUID $ zusr)

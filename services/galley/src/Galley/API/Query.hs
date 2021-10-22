@@ -75,11 +75,11 @@ import Wire.API.Federation.Error
 import qualified Wire.API.Provider.Bot as Public
 import qualified Wire.API.Routes.MultiTablePaging as Public
 
-getBotConversationH :: Member Concurrency r => BotId ::: ConvId ::: JSON -> Galley r Response
+getBotConversationH :: BotId ::: ConvId ::: JSON -> Galley r Response
 getBotConversationH (zbot ::: zcnv ::: _) = do
   json <$> getBotConversation zbot zcnv
 
-getBotConversation :: Member Concurrency r => BotId -> ConvId -> Galley r Public.BotConvView
+getBotConversation :: BotId -> ConvId -> Galley r Public.BotConvView
 getBotConversation zbot zcnv = do
   (c, _) <- getConversationAndMemberWithError (errorDescriptionTypeToWai @ConvNotFound) (botUserId zbot) zcnv
   domain <- viewFederationDomain
@@ -93,7 +93,7 @@ getBotConversation zbot zcnv = do
       | otherwise =
         Just (OtherMember (Qualified (lmId m) domain) (lmService m) (lmConvRoleName m))
 
-getUnqualifiedConversation :: Member Concurrency r => UserId -> ConvId -> Galley r Public.Conversation
+getUnqualifiedConversation :: UserId -> ConvId -> Galley r Public.Conversation
 getUnqualifiedConversation zusr cnv = do
   c <- getConversationAndCheckMembership zusr cnv
   Mapping.conversationView zusr c
@@ -204,7 +204,7 @@ getRemoteConversationsWithFailures zusr convs = do
             . Logger.field "error" (show e)
         throwE e
 
-getConversationRoles :: Member Concurrency r => UserId -> ConvId -> Galley r Public.ConversationRolesList
+getConversationRoles :: UserId -> ConvId -> Galley r Public.ConversationRolesList
 getConversationRoles zusr cnv = do
   void $ getConversationAndCheckMembership zusr cnv
   -- NOTE: If/when custom roles are added, these roles should
@@ -261,7 +261,6 @@ conversationIdsPageFrom zusr Public.GetMultiTablePageRequest {..} = do
         }
 
 getConversations ::
-  Member Concurrency r =>
   UserId ->
   Maybe (Range 1 32 (CommaSeparatedList ConvId)) ->
   Maybe ConvId ->
@@ -272,7 +271,6 @@ getConversations user mids mstart msize = do
   flip ConversationList more <$> mapM (Mapping.conversationView user) cs
 
 getConversationsInternal ::
-  Member Concurrency r =>
   UserId ->
   Maybe (Range 1 32 (CommaSeparatedList ConvId)) ->
   Maybe ConvId ->
@@ -356,7 +354,6 @@ listConversations user (Public.ListConversations ids) = do
       pure (founds, notFounds)
 
 iterateConversations ::
-  Member Concurrency r =>
   UserId ->
   Range 1 500 Int32 ->
   ([Data.Conversation] -> Galley r a) ->
@@ -403,7 +400,6 @@ getConversationMeta cnv = do
       pure Nothing
 
 getConversationByReusableCode ::
-  Member Concurrency r =>
   UserId ->
   Key ->
   Value ->

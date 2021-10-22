@@ -197,7 +197,6 @@ getRemoteClients remoteMembers = do
       Map.mapKeys (domain,) . fmap (Set.map pubClientId) . userMap <$> runFederatedBrig domain rpc
 
 postRemoteOtrMessage ::
-  Member Concurrency r =>
   Qualified UserId ->
   Qualified ConvId ->
   LByteString ->

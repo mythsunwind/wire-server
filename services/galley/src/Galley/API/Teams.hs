@@ -220,20 +220,13 @@ createBindingTeam zusr tid (BindingNewTeam body) = do
   finishCreateTeam team owner [] Nothing
   pure tid
 
-updateTeamStatusH ::
-  Member Concurrency r =>
-  TeamId ::: JsonRequest TeamStatusUpdate ::: JSON ->
-  Galley r Response
+updateTeamStatusH :: TeamId ::: JsonRequest TeamStatusUpdate ::: JSON -> Galley r Response
 updateTeamStatusH (tid ::: req ::: _) = do
   teamStatusUpdate <- fromJsonBody req
   updateTeamStatus tid teamStatusUpdate
   return empty
 
-updateTeamStatus ::
-  Member Concurrency r =>
-  TeamId ->
-  TeamStatusUpdate ->
-  Galley r ()
+updateTeamStatus :: TeamId -> TeamStatusUpdate -> Galley r ()
 updateTeamStatus tid (TeamStatusUpdate newStatus cur) = do
   oldStatus <- tdStatus <$> (Data.team tid >>= ifNothing teamNotFound)
   valid <- validateTransition (oldStatus, newStatus)
