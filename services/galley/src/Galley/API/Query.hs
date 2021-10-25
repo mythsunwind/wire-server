@@ -53,7 +53,6 @@ import Galley.API.Util
 import Galley.App
 import qualified Galley.Data as Data
 import qualified Galley.Data.Types as Data
-import Galley.Effects
 import Galley.Types
 import Galley.Types.Conversations.Members
 import Galley.Types.Conversations.Roles
@@ -64,6 +63,7 @@ import Network.Wai.Predicate hiding (result, setStatus)
 import Network.Wai.Utilities
 import qualified Network.Wai.Utilities.Error as Wai
 import qualified System.Logger.Class as Logger
+import UnliftIO (pooledForConcurrentlyN)
 import Wire.API.Conversation (ConversationCoverView (..))
 import qualified Wire.API.Conversation as Public
 import qualified Wire.API.Conversation.Role as Public
@@ -98,7 +98,7 @@ getUnqualifiedConversation zusr cnv = do
   c <- getConversationAndCheckMembership zusr cnv
   Mapping.conversationView zusr c
 
-getConversation :: forall r. Member Concurrency r => UserId -> Qualified ConvId -> Galley r Public.Conversation
+getConversation :: UserId -> Qualified ConvId -> Galley r Public.Conversation
 getConversation zusr cnv = do
   lusr <- qualifyLocal zusr
   foldQualified
@@ -115,7 +115,7 @@ getConversation zusr cnv = do
         [conv] -> pure conv
         _convs -> throwM (federationUnexpectedBody "expected one conversation, got multiple")
 
-getRemoteConversations :: Member Concurrency r => UserId -> [Remote ConvId] -> Galley r [Public.Conversation]
+getRemoteConversations :: UserId -> [Remote ConvId] -> Galley r [Public.Conversation]
 getRemoteConversations zusr remoteConvs =
   getRemoteConversationsWithFailures zusr remoteConvs >>= \case
     -- throw first error
@@ -156,7 +156,6 @@ partitionGetConversationFailures = bimap concat concat . partitionEithers . map 
     split (FailedGetConversation convs (FailedGetConversationRemotely _)) = Right convs
 
 getRemoteConversationsWithFailures ::
-  Member Concurrency r =>
   UserId ->
   [Remote ConvId] ->
   Galley r ([FailedGetConversation], [Public.Conversation])
@@ -182,7 +181,8 @@ getRemoteConversationsWithFailures zusr convs = do
         | otherwise = [failedGetConversationLocally (map qUntagged locallyNotFound)]
 
   -- request conversations from remote backends
-  fmap (bimap (localFailures <>) concat . partitionEithers)
+  liftGalley0
+    . fmap (bimap (localFailures <>) concat . partitionEithers)
     . pooledForConcurrentlyN 8 (bucketRemote locallyFound)
     $ \someConvs -> do
       let req = FederatedGalley.GetConversationsRequest zusr (tUnqualified someConvs)
@@ -193,8 +193,8 @@ getRemoteConversationsWithFailures zusr convs = do
   where
     handleFailures ::
       [Remote ConvId] ->
-      ExceptT FederationError (Galley r) a ->
-      Galley r (Either FailedGetConversation a)
+      ExceptT FederationError Galley0 a ->
+      Galley0 (Either FailedGetConversation a)
     handleFailures rconvs action = runExceptT
       . withExceptT (failedGetConversationRemotely rconvs)
       . catchE action
@@ -303,7 +303,6 @@ getConversationsInternal user mids mstart msize = do
       | otherwise = pure True
 
 listConversations ::
-  Member Concurrency r =>
   UserId ->
   Public.ListConversations ->
   Galley r Public.ConversationsResponse

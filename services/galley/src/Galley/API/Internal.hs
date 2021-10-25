@@ -247,7 +247,7 @@ type IFeatureStatusDeprecatedPut featureName =
     :> ReqBody '[Servant.JSON] (Public.TeamFeatureStatus featureName)
     :> Put '[Servant.JSON] (Public.TeamFeatureStatus featureName)
 
-servantSitemap :: ServerT ServantAPI Galley0
+servantSitemap :: ServerT ServantAPI (Galley GalleyEffects)
 servantSitemap =
   genericServerT $
     InternalApi
@@ -298,7 +298,7 @@ iPutTeamFeature ::
   Galley r (Public.TeamFeatureStatus a)
 iPutTeamFeature setter = Features.setFeatureStatus @a setter DontDoAuth
 
-sitemap :: Routes a Galley0 ()
+sitemap :: Routes a (Galley GalleyEffects) ()
 sitemap = do
   -- Conversation API (internal) ----------------------------------------
 
@@ -460,7 +460,12 @@ sitemap = do
   get "/i/legalhold/whitelisted-teams/:tid" (continue getTeamLegalholdWhitelistedH) $
     capture "tid"
 
-rmUser :: forall r. Member Concurrency r => UserId -> Maybe ConnId -> Galley r ()
+rmUser ::
+  forall r.
+  Members '[ExternalAccess, FederatorAccess, GundeckAccess] r =>
+  UserId ->
+  Maybe ConnId ->
+  Galley r ()
 rmUser user conn = do
   let n = toRange (Proxy @100) :: Range 1 100 Int32
       nRange1000 = rcast n :: Range 1 1000 Int32
@@ -521,7 +526,7 @@ rmUser user conn = do
       for_ cids $ \cid ->
         Update.removeMemberFromRemoteConv cid lusr Nothing (qUntagged lusr)
 
-deleteLoop :: forall r. Member Concurrency r => Galley r ()
+deleteLoop :: forall r. Members '[ExternalAccess, GundeckAccess] r => Galley r ()
 deleteLoop = do
   q <- view deleteQueue
   safeForever "deleteLoop" $ do

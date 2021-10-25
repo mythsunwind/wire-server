@@ -65,7 +65,7 @@ import Wire.API.Team.LegalHold (LegalholdProtectee (LegalholdPlusFederationNotIm
 --
 -- See Note [managed conversations].
 createGroupConversation ::
-  Member Concurrency r =>
+  Members '[BrigAccess, FederatorAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Public.NewConvUnmanaged ->
@@ -78,7 +78,7 @@ createGroupConversation user conn wrapped@(Public.NewConvUnmanaged body) =
 -- | An internal endpoint for creating managed group conversations. Will
 -- throw an error for everything else.
 internalCreateManagedConversationH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, FederatorAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: JsonRequest NewConvManaged ->
   Galley r Response
 internalCreateManagedConversationH (zusr ::: zcon ::: req) = do
@@ -86,7 +86,7 @@ internalCreateManagedConversationH (zusr ::: zcon ::: req) = do
   handleConversationResponse <$> internalCreateManagedConversation zusr zcon newConv
 
 internalCreateManagedConversation ::
-  Member Concurrency r =>
+  Members '[BrigAccess, FederatorAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   NewConvManaged ->
@@ -108,7 +108,7 @@ ensureNoLegalholdConflicts remotes locals = do
 
 -- | A helper for creating a regular (non-team) group conversation.
 createRegularGroupConv ::
-  Member Concurrency r =>
+  Members '[BrigAccess, FederatorAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   NewConvUnmanaged ->
@@ -137,7 +137,7 @@ createRegularGroupConv zusr zcon (NewConvUnmanaged body) = do
 -- | A helper for creating a team group conversation, used by the endpoint
 -- handlers above. Only supports unmanaged conversations.
 createTeamGroupConv ::
-  Member Concurrency r =>
+  Members '[BrigAccess, FederatorAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Public.ConvTeamInfo ->
@@ -201,7 +201,7 @@ createSelfConversation zusr = do
       conversationCreated zusr c
 
 createOne2OneConversation ::
-  Member Concurrency r =>
+  Members '[BrigAccess, FederatorAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   NewConvUnmanaged ->
@@ -245,7 +245,7 @@ createOne2OneConversation zusr zcon (NewConvUnmanaged j) = do
         Nothing -> throwM teamNotFound
 
 createLegacyOne2OneConversationUnchecked ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, GundeckAccess] r =>
   Local UserId ->
   ConnId ->
   Maybe (Range 1 256 Text) ->
@@ -264,7 +264,7 @@ createLegacyOne2OneConversationUnchecked self zcon name mtid other = do
       conversationCreated (tUnqualified self) c
 
 createOne2OneConversationUnchecked ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, GundeckAccess] r =>
   Local UserId ->
   ConnId ->
   Maybe (Range 1 256 Text) ->
@@ -280,7 +280,7 @@ createOne2OneConversationUnchecked self zcon name mtid other = do
   create (one2OneConvId (qUntagged self) other) self zcon name mtid other
 
 createOne2OneConversationLocally ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, GundeckAccess] r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -309,7 +309,7 @@ createOne2OneConversationRemotely _ _ _ _ _ _ =
   throwM federationNotImplemented
 
 createConnectConversation ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, GundeckAccess] r =>
   UserId ->
   Maybe ConnId ->
   Connect ->
@@ -331,7 +331,7 @@ createConnectConversationWithRemote _ _ _ =
   throwM federationNotImplemented
 
 createLegacyConnectConversation ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, GundeckAccess] r =>
   Local UserId ->
   Maybe ConnId ->
   Local UserId ->
@@ -413,7 +413,7 @@ handleConversationResponse = \case
   Existed cnv -> json cnv & setStatus status200 . location (qUnqualified . cnvQualifiedId $ cnv)
 
 notifyCreatedConversation ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, GundeckAccess] r =>
   Maybe UTCTime ->
   UserId ->
   Maybe ConnId ->

@@ -23,10 +23,6 @@ import Data.Set.Lens
 import Data.Time.Clock (UTCTime, getCurrentTime)
 import Galley.API.LegalHold.Conflicts (guardQualifiedLegalholdPolicyConflicts)
 import Galley.API.Util
-  ( runFederatedBrig,
-    runFederatedGalley,
-    viewFederationDomain,
-  )
 import Galley.App
 import qualified Galley.Data as Data
 import Galley.Data.Services as Data
@@ -34,7 +30,6 @@ import Galley.Effects
 import qualified Galley.External as External
 import qualified Galley.Intra.Client as Intra
 import Galley.Intra.Push
-import Galley.Intra.User
 import Galley.Options (optSettings, setIntraListing)
 import qualified Galley.Types.Clients as Clients
 import Galley.Types.Conversations.Members
@@ -180,23 +175,20 @@ checkMessageClients sender participantMap recipientMap mismatchStrat =
       )
 
 getRemoteClients ::
-  forall r.
-  Member Concurrency r =>
+  Member FederatorAccess r =>
   [RemoteMember] ->
   Galley r (Map (Domain, UserId) (Set ClientId))
-getRemoteClients remoteMembers = do
-  fmap mconcat -- concatenating maps is correct here, because their sets of keys are disjoint
-    . pooledMapConcurrentlyN 8 getRemoteClientsFromDomain
-    . bucketRemote
-    . map rmId
-    $ remoteMembers
+getRemoteClients remoteMembers =
+  -- concatenating maps is correct here, because their sets of keys are disjoint
+  mconcat . map tUnqualified
+    <$> runFederatedConcurrently (map rmId remoteMembers) getRemoteClientsFromDomain
   where
-    getRemoteClientsFromDomain :: Remote [UserId] -> Galley r (Map (Domain, UserId) (Set ClientId))
-    getRemoteClientsFromDomain (qUntagged -> Qualified uids domain) = do
-      let rpc = FederatedBrig.getUserClients FederatedBrig.clientRoutes (FederatedBrig.GetUserClients uids)
-      Map.mapKeys (domain,) . fmap (Set.map pubClientId) . userMap <$> runFederatedBrig domain rpc
+    getRemoteClientsFromDomain (qUntagged -> Qualified uids domain) =
+      Map.mapKeys (domain,) . fmap (Set.map pubClientId) . userMap
+        <$> FederatedBrig.getUserClients FederatedBrig.clientRoutes (FederatedBrig.GetUserClients uids)
 
 postRemoteOtrMessage ::
+  Member FederatorAccess r =>
   Qualified UserId ->
   Qualified ConvId ->
   LByteString ->
@@ -212,7 +204,7 @@ postRemoteOtrMessage sender conv rawMsg = do
   FederatedGalley.msResponse <$> runFederatedGalley (qDomain conv) rpc
 
 postQualifiedOtrMessage ::
-  Member Concurrency r =>
+  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   UserType ->
   Qualified UserId ->
   Maybe ConnId ->
@@ -308,7 +300,7 @@ postQualifiedOtrMessage senderType sender mconn convId msg = runExceptT $ do
 -- | Send both local and remote messages, return the set of clients for which
 -- sending has failed.
 sendMessages ::
-  Member Concurrency r =>
+  Members '[BotAccess, GundeckAccess, ExternalAccess] r =>
   UTCTime ->
   Qualified UserId ->
   ClientId ->
@@ -335,7 +327,7 @@ sendMessages now sender senderClient mconn conv localMemberMap metadata messages
         mempty
 
 sendLocalMessages ::
-  Member Concurrency r =>
+  Members '[BotAccess, GundeckAccess, ExternalAccess] r =>
   UTCTime ->
   Qualified UserId ->
   ClientId ->
@@ -432,7 +424,12 @@ newUserPush p = MessagePush {userPushes = pure p, botPushes = mempty}
 newBotPush :: BotMember -> Event -> MessagePush
 newBotPush b e = MessagePush {userPushes = mempty, botPushes = pure (b, e)}
 
-runMessagePush :: forall r. Member Concurrency r => Qualified ConvId -> MessagePush -> Galley r ()
+runMessagePush ::
+  forall r.
+  Members '[BotAccess, GundeckAccess, ExternalAccess] r =>
+  Qualified ConvId ->
+  MessagePush ->
+  Galley r ()
 runMessagePush cnv mp = do
   pushSome (userPushes mp)
   pushToBots (botPushes mp)
@@ -443,9 +440,7 @@ runMessagePush cnv mp = do
       if localDomain /= qDomain cnv
         then unless (null pushes) $ do
           Log.warn $ Log.msg ("Ignoring messages for local bots in a remote conversation" :: ByteString) . Log.field "conversation" (show cnv)
-        else void . forkIO $ do
-          gone <- External.deliver pushes
-          mapM_ (deleteBot (qUnqualified cnv) . botMemId) gone
+        else External.deliverAndDeleteAsync (qUnqualified cnv) pushes
 
 newMessageEvent :: Qualified ConvId -> Qualified UserId -> ClientId -> Maybe Text -> UTCTime -> ClientId -> Text -> Event
 newMessageEvent convId sender senderClient dat time receiverClient cipherText =

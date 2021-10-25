@@ -113,6 +113,7 @@ import Network.Wai.Predicate hiding (or, result, setStatus)
 import Network.Wai.Utilities
 import qualified SAML2.WebSSO as SAML
 import qualified System.Logger.Class as Log
+import UnliftIO.Async (mapConcurrently)
 import qualified Wire.API.Conversation.Role as Public
 import Wire.API.ErrorDescription (ConvNotFound, NotATeamMember, operationDenied)
 import qualified Wire.API.Notification as Public
@@ -169,7 +170,7 @@ lookupTeam zusr tid = do
     else pure Nothing
 
 createNonBindingTeamH ::
-  Member Concurrency r =>
+  Members '[GundeckAccess, BrigAccess] r =>
   UserId ::: ConnId ::: JsonRequest Public.NonBindingNewTeam ::: JSON ->
   Galley r Response
 createNonBindingTeamH (zusr ::: zcon ::: req ::: _) = do
@@ -178,7 +179,7 @@ createNonBindingTeamH (zusr ::: zcon ::: req ::: _) = do
   pure (empty & setStatus status201 . location newTeamId)
 
 createNonBindingTeam ::
-  Member Concurrency r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Public.NonBindingNewTeam ->
@@ -200,7 +201,7 @@ createNonBindingTeam zusr zcon (Public.NonBindingNewTeam body) = do
   pure (team ^. teamId)
 
 createBindingTeamH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ::: TeamId ::: JsonRequest BindingNewTeam ::: JSON ->
   Galley r Response
 createBindingTeamH (zusr ::: tid ::: req ::: _) = do
@@ -209,7 +210,7 @@ createBindingTeamH (zusr ::: tid ::: req ::: _) = do
   pure (empty & setStatus status201 . location newTeamId)
 
 createBindingTeam ::
-  Member Concurrency r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ->
   TeamId ->
   BindingNewTeam ->
@@ -257,7 +258,7 @@ updateTeamStatus tid (TeamStatusUpdate newStatus cur) = do
       (_, _) -> throwM invalidTeamStatusUpdate
 
 updateTeamH ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ::: ConnId ::: TeamId ::: JsonRequest Public.TeamUpdateData ::: JSON ->
   Galley r Response
 updateTeamH (zusr ::: zcon ::: tid ::: req ::: _) = do
@@ -265,7 +266,13 @@ updateTeamH (zusr ::: zcon ::: tid ::: req ::: _) = do
   updateTeam zusr zcon tid updateData
   pure empty
 
-updateTeam :: Member Concurrency r => UserId -> ConnId -> TeamId -> Public.TeamUpdateData -> Galley r ()
+updateTeam ::
+  Member GundeckAccess r =>
+  UserId ->
+  ConnId ->
+  TeamId ->
+  Public.TeamUpdateData ->
+  Galley r ()
 updateTeam zusr zcon tid updateData = do
   zusrMembership <- Data.teamMember tid zusr
   -- let zothers = map (view userId) membs
@@ -317,7 +324,13 @@ internalDeleteBindingTeamWithOneMember tid = do
     _ -> throwM notAOneMemberTeam
 
 -- This function is "unchecked" because it does not validate that the user has the `DeleteTeam` permission.
-uncheckedDeleteTeam :: forall r. Member Concurrency r => UserId -> Maybe ConnId -> TeamId -> Galley r ()
+uncheckedDeleteTeam ::
+  forall r.
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ->
+  Maybe ConnId ->
+  TeamId ->
+  Galley r ()
 uncheckedDeleteTeam zusr zcon tid = do
   team <- Data.team tid
   when (isJust team) $ do
@@ -333,7 +346,7 @@ uncheckedDeleteTeam zusr zcon tid = do
     (ue, be) <- foldrM (createConvDeleteEvents now membs) ([], []) convs
     let e = newEvent TeamDelete tid now
     pushDeleteEvents membs e ue
-    void . forkIO $ void $ External.deliver be
+    External.deliverAsync be
     -- TODO: we don't delete bots here, but we should do that, since
     -- every bot user can only be in a single conversation. Just
     -- deleting conversations from the database is not enough.
@@ -569,7 +582,7 @@ uncheckedGetTeamMembers ::
 uncheckedGetTeamMembers tid maxResults = Data.teamMembersWithLimit tid maxResults
 
 addTeamMemberH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: TeamId ::: JsonRequest Public.NewTeamMember ::: JSON ->
   Galley r Response
 addTeamMemberH (zusr ::: zcon ::: tid ::: req ::: _) = do
@@ -577,7 +590,13 @@ addTeamMemberH (zusr ::: zcon ::: tid ::: req ::: _) = do
   addTeamMember zusr zcon tid nmem
   pure empty
 
-addTeamMember :: Member Concurrency r => UserId -> ConnId -> TeamId -> Public.NewTeamMember -> Galley r ()
+addTeamMember ::
+  Members '[BrigAccess, GundeckAccess] r =>
+  UserId ->
+  ConnId ->
+  TeamId ->
+  Public.NewTeamMember ->
+  Galley r ()
 addTeamMember zusr zcon tid nmem = do
   let uid = nmem ^. ntmNewTeamMember . userId
   Log.debug $
@@ -598,13 +617,16 @@ addTeamMember zusr zcon tid nmem = do
   void $ addTeamMemberInternal tid (Just zusr) (Just zcon) nmem memList
 
 -- This function is "unchecked" because there is no need to check for user binding (invite only).
-uncheckedAddTeamMemberH :: Member Concurrency r => TeamId ::: JsonRequest NewTeamMember ::: JSON -> Galley r Response
+uncheckedAddTeamMemberH ::
+  Member GundeckAccess r =>
+  TeamId ::: JsonRequest NewTeamMember ::: JSON ->
+  Galley r Response
 uncheckedAddTeamMemberH (tid ::: req ::: _) = do
   nmem <- fromJsonBody req
   uncheckedAddTeamMember tid nmem
   return empty
 
-uncheckedAddTeamMember :: Member Concurrency r => TeamId -> NewTeamMember -> Galley r ()
+uncheckedAddTeamMember :: Member GundeckAccess r => TeamId -> NewTeamMember -> Galley r ()
 uncheckedAddTeamMember tid nmem = do
   mems <- Data.teamMembersForFanout tid
   (TeamSize sizeBeforeJoin) <- BrigTeam.getSize tid
@@ -614,7 +636,7 @@ uncheckedAddTeamMember tid nmem = do
   Journal.teamUpdate tid (sizeBeforeAdd + 1) billingUserIds
 
 updateTeamMemberH ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ::: ConnId ::: TeamId ::: JsonRequest Public.NewTeamMember ::: JSON ->
   Galley r Response
 updateTeamMemberH (zusr ::: zcon ::: tid ::: req ::: _) = do
@@ -625,7 +647,7 @@ updateTeamMemberH (zusr ::: zcon ::: tid ::: req ::: _) = do
 
 updateTeamMember ::
   forall r.
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ->
   ConnId ->
   TeamId ->
@@ -694,7 +716,7 @@ updateTeamMember zusr zcon tid targetMember = do
       for_ pushPriv $ \p -> push1 $ p & pushConn .~ Just zcon
 
 deleteTeamMemberH ::
-  Member Concurrency r =>
+  Members '[ExternalAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: TeamId ::: UserId ::: OptionalJsonRequest Public.TeamMemberDeleteData ::: JSON ->
   Galley r Response
 deleteTeamMemberH (zusr ::: zcon ::: tid ::: remove ::: req ::: _) = do
@@ -709,7 +731,7 @@ data TeamMemberDeleteResult
 
 -- | 'TeamMemberDeleteData' is only required for binding teams
 deleteTeamMember ::
-  Member Concurrency r =>
+  Members '[ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   TeamId ->
@@ -752,7 +774,7 @@ deleteTeamMember zusr zcon tid remove mBody = do
 -- This function is "unchecked" because it does not validate that the user has the `RemoveTeamMember` permission.
 uncheckedDeleteTeamMember ::
   forall r.
-  Member Concurrency r =>
+  Members '[GundeckAccess, ExternalAccess] r =>
   UserId ->
   Maybe ConnId ->
   TeamId ->
@@ -798,7 +820,7 @@ uncheckedDeleteTeamMember zusr zcon tid remove mems = do
       let y = Conv.Event Conv.MemberLeave qconvId qusr now edata
       for_ (newPushLocal (mems ^. teamMemberListType) zusr (ConvEvent y) (recipient <$> x)) $ \p ->
         push1 $ p & pushConn .~ zcon
-      void . forkIO $ void $ External.deliver (bots `zip` repeat y)
+      External.deliverAsync (bots `zip` repeat y)
 
 getTeamConversations :: UserId -> TeamId -> Galley r Public.TeamConversationList
 getTeamConversations zusr tid = do
@@ -814,7 +836,13 @@ getTeamConversation zusr tid cid = do
     throwErrorDescription (operationDenied GetTeamConversations)
   Data.teamConversation tid cid >>= maybe (throwErrorDescriptionType @ConvNotFound) pure
 
-deleteTeamConversation :: Member Concurrency r => UserId -> ConnId -> TeamId -> ConvId -> Galley r ()
+deleteTeamConversation ::
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  UserId ->
+  ConnId ->
+  TeamId ->
+  ConvId ->
+  Galley r ()
 deleteTeamConversation zusr zcon _tid cid = do
   lusr <- qualifyLocal zusr
   lconv <- qualifyLocal cid
@@ -863,13 +891,13 @@ withTeamIds usr range size k = case range of
     k False ids
 {-# INLINE withTeamIds #-}
 
-ensureUnboundUsers :: Member Concurrency r => [UserId] -> Galley r ()
+ensureUnboundUsers :: [UserId] -> Galley r ()
 ensureUnboundUsers uids = do
   -- We check only 1 team because, by definition, users in binding teams
   -- can only be part of one team.
-  ts <- mapConcurrently Data.oneUserTeam uids
+  ts <- liftGalley0 $ mapConcurrently Data.oneUserTeam uids
   let teams = toList $ fromList (catMaybes ts)
-  binds <- mapConcurrently Data.teamBinding teams
+  binds <- liftGalley0 $ mapConcurrently Data.teamBinding teams
   when (any ((==) (Just Binding)) binds) $
     throwM userBindingExists
 
@@ -930,7 +958,7 @@ teamSizeBelowLimit teamSize = do
       pure True
 
 addTeamMemberInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   Maybe UserId ->
   Maybe ConnId ->
@@ -991,7 +1019,7 @@ getTeamNotificationsH (zusr ::: sinceRaw ::: size ::: _) = do
     isV1UUID u = if UUID.version u == 1 then Just u else Nothing
 
 finishCreateTeam ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   Team ->
   TeamMember ->
   [TeamMember] ->

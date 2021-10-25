@@ -211,7 +211,7 @@ setFeatureStatusNoConfig ::
   ( Public.KnownTeamFeatureName a,
     Public.FeatureHasNoConfig a,
     TeamFeatures.HasStatusCol a,
-    Member Concurrency r
+    Member GundeckAccess r
   ) =>
   (Public.TeamFeatureStatusValue -> TeamId -> Galley r ()) ->
   TeamId ->
@@ -241,7 +241,7 @@ getSSOStatusInternal =
         FeatureSSODisabledByDefault -> Public.TeamFeatureDisabled
 
 setSSOStatusInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   (Public.TeamFeatureStatus 'Public.TeamFeatureSSO) ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureSSO)
@@ -261,7 +261,7 @@ getTeamSearchVisibilityAvailableInternal =
         FeatureTeamSearchVisibilityDisabledByDefault -> Public.TeamFeatureDisabled
 
 setTeamSearchVisibilityAvailableInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   (Public.TeamFeatureStatus 'Public.TeamFeatureSearchVisibility) ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureSearchVisibility)
@@ -281,7 +281,7 @@ getValidateSAMLEmailsInternal =
     getDef = pure Public.TeamFeatureDisabled
 
 setValidateSAMLEmailsInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   (Public.TeamFeatureStatus 'Public.TeamFeatureValidateSAMLEmails) ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureValidateSAMLEmails)
@@ -299,7 +299,7 @@ getDigitalSignaturesInternal =
     getDef = pure Public.TeamFeatureDisabled
 
 setDigitalSignaturesInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   Public.TeamFeatureStatus 'Public.TeamFeatureDigitalSignatures ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureDigitalSignatures)
@@ -314,7 +314,7 @@ getLegalholdStatusInternal (Right tid) = do
     False -> Public.TeamFeatureStatusNoConfig Public.TeamFeatureDisabled
 
 setLegalholdStatusInternal ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   TeamId ->
   Public.TeamFeatureStatus 'Public.TeamFeatureLegalHold ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureLegalHold)
@@ -360,7 +360,7 @@ getFeatureStatusWithDefaultConfig lens' =
         <&> Public.tfwoStatus . view unDefaults
 
 setFileSharingInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   Public.TeamFeatureStatus 'Public.TeamFeatureFileSharing ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureFileSharing)
@@ -398,13 +398,13 @@ getConferenceCallingInternal (Right tid) = do
   getFeatureStatusWithDefaultConfig @'Public.TeamFeatureConferenceCalling flagConferenceCalling (Just tid)
 
 setConferenceCallingInternal ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   TeamId ->
   Public.TeamFeatureStatus 'Public.TeamFeatureConferenceCalling ->
   Galley r (Public.TeamFeatureStatus 'Public.TeamFeatureConferenceCalling)
 setConferenceCallingInternal = setFeatureStatusNoConfig @'Public.TeamFeatureConferenceCalling $ \_status _tid -> pure ()
 
-pushFeatureConfigEvent :: Member Concurrency r => TeamId -> Event.Event -> Galley r ()
+pushFeatureConfigEvent :: Member GundeckAccess r => TeamId -> Event.Event -> Galley r ()
 pushFeatureConfigEvent tid event = do
   memList <- Data.teamMembersForFanout tid
   when ((memList ^. teamMemberListType) == ListTruncated) $ do

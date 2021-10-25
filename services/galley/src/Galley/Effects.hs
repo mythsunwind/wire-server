@@ -18,12 +18,44 @@
 module Galley.Effects
   ( GalleyEffects,
     Concurrency,
+    Intra,
+    BrigAccess,
+    GundeckAccess,
+    ExternalAccess,
+    FederatorAccess,
+    BotAccess,
+    FireAndForget,
+
+    -- * Polysemy re-exports
     Member,
+    Members,
   )
 where
 
 import Polysemy
 
-type GalleyEffects = '[Concurrency]
-
 data Concurrency m a
+
+data Intra m a
+
+data BrigAccess m a
+
+data GundeckAccess m a
+
+data ExternalAccess m a
+
+data FederatorAccess m a
+
+data BotAccess m a
+
+data FireAndForget m a
+
+type GalleyEffects =
+  '[ Intra,
+     BrigAccess,
+     GundeckAccess,
+     ExternalAccess,
+     FederatorAccess,
+     BotAccess,
+     FireAndForget
+   ]

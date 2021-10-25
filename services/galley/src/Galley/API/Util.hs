@@ -59,6 +59,7 @@ import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Predicate hiding (Error)
 import Network.Wai.Utilities
+import UnliftIO.Async (concurrently, pooledForConcurrentlyN)
 import qualified Wire.API.Conversation as Public
 import Wire.API.Conversation.Action (ConversationAction (..), conversationActionTag)
 import Wire.API.ErrorDescription
@@ -88,7 +89,7 @@ ensureAccessRole role users = case role of
 --
 -- Team members are always considered connected, so we only check 'ensureConnected'
 -- for non-team-members of the _given_ user
-ensureConnectedOrSameTeam :: Member Concurrency r => Qualified UserId -> [UserId] -> Galley r ()
+ensureConnectedOrSameTeam :: Member BrigAccess r => Qualified UserId -> [UserId] -> Galley r ()
 ensureConnectedOrSameTeam _ [] = pure ()
 ensureConnectedOrSameTeam (Qualified u domain) uids = do
   -- FUTUREWORK(federation, #1262): handle remote users (can't be part of the same team, just check connections)
@@ -106,14 +107,14 @@ ensureConnectedOrSameTeam (Qualified u domain) uids = do
 -- The connection has to be bidirectional (e.g. if A connects to B and later
 -- B blocks A, the status of A-to-B is still 'Accepted' but it doesn't mean
 -- that they are connected).
-ensureConnected :: Member Concurrency r => Local UserId -> UserList UserId -> Galley r ()
+ensureConnected :: Member BrigAccess r => Local UserId -> UserList UserId -> Galley r ()
 ensureConnected self others = do
   ensureConnectedToLocals (tUnqualified self) (ulLocals others)
   ensureConnectedToRemotes self (ulRemotes others)
 
-ensureConnectedToLocals :: Member Concurrency r => UserId -> [UserId] -> Galley r ()
+ensureConnectedToLocals :: Member BrigAccess r => UserId -> [UserId] -> Galley r ()
 ensureConnectedToLocals _ [] = pure ()
-ensureConnectedToLocals u uids = do
+ensureConnectedToLocals u uids = liftGalley0 $ do
   (connsFrom, connsTo) <-
     getConnectionsUnqualified [u] (Just uids) (Just Accepted)
       `concurrently` getConnectionsUnqualified uids (Just [u]) (Just Accepted)
@@ -255,7 +256,7 @@ permissionCheckTeamConv zusr cnv perm =
 
 -- | Try to accept a 1-1 conversation, promoting connect conversations as appropriate.
 acceptOne2One ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ->
   Data.Conversation ->
   Maybe ConnId ->
@@ -591,7 +592,7 @@ canDeleteMember deleter deletee
 
 -- | Send an event to local users and bots
 pushConversationEvent ::
-  (Member Concurrency r, Foldable f) =>
+  (Members '[GundeckAccess, ExternalAccess] r, Foldable f) =>
   Maybe ConnId ->
   Event ->
   f UserId ->
@@ -601,7 +602,7 @@ pushConversationEvent conn e users bots = do
   localDomain <- viewFederationDomain
   for_ (newConversationEventPush localDomain e (toList users)) $ \p ->
     push1 $ p & set pushConn conn
-  void . forkIO $ void $ External.deliver (toList bots `zip` repeat e)
+  External.deliverAsync (toList bots `zip` repeat e)
 
 verifyReusableCode :: ConversationCode -> Galley r DataTypes.Code
 verifyReusableCode convCode = do
@@ -635,14 +636,14 @@ qualifyLocal :: MonadReader Env m => a -> m (Local a)
 qualifyLocal a = toLocalUnsafe <$> viewFederationDomain <*> pure a
 
 checkRemoteUsersExist ::
-  (Functor f, Foldable f) =>
+  (Member FederatorAccess r, Functor f, Foldable f) =>
   f (Remote UserId) ->
   Galley r ()
 checkRemoteUsersExist =
   -- FUTUREWORK: pooledForConcurrentlyN_ instead of sequential checks per domain
   traverse_ checkRemotesFor . bucketRemote
 
-checkRemotesFor :: Remote [UserId] -> Galley r ()
+checkRemotesFor :: Member FederatorAccess r => Remote [UserId] -> Galley r ()
 checkRemotesFor (qUntagged -> Qualified uids domain) = do
   let rpc = FederatedBrig.getUsersByIds FederatedBrig.clientRoutes uids
   users <- runFederatedBrig domain rpc
@@ -653,38 +654,54 @@ checkRemotesFor (qUntagged -> Qualified uids domain) = do
   unless (Set.fromList uids == Set.fromList uids') $
     throwM unknownRemoteUser
 
-type FederatedGalleyRPC c r a = FederatorClient c (ExceptT FederationClientFailure (Galley r)) a
+type FederatedGalleyRPC c a = FederatorClient c (ExceptT FederationClientFailure Galley0) a
 
-runFederatedGalley :: Domain -> FederatedGalleyRPC 'Galley r a -> Galley r a
-runFederatedGalley = runFederated @'Galley
-
-runFederatedBrig :: Domain -> FederatedGalleyRPC 'Brig r a -> Galley r a
-runFederatedBrig = runFederated @'Brig
-
-runFederated ::
-  forall (c :: Component) r a.
+runFederated0 ::
+  forall (c :: Component) a.
   Domain ->
-  FederatedGalleyRPC c r a ->
-  Galley r a
-runFederated remoteDomain rpc = do
+  FederatedGalleyRPC c a ->
+  Galley0 a
+runFederated0 remoteDomain rpc = do
   runExceptT (executeFederated remoteDomain rpc)
     >>= either (throwM . federationErrorToWai) pure
 
+runFederatedGalley ::
+  Member FederatorAccess r =>
+  Domain ->
+  FederatedGalleyRPC 'Galley a ->
+  Galley r a
+runFederatedGalley = runFederated
+
+runFederatedBrig ::
+  Member FederatorAccess r =>
+  Domain ->
+  FederatedGalleyRPC 'Brig a ->
+  Galley r a
+runFederatedBrig = runFederated
+
+runFederated ::
+  forall (c :: Component) r a.
+  Member FederatorAccess r =>
+  Domain ->
+  FederatedGalleyRPC c a ->
+  Galley r a
+runFederated remoteDomain = liftGalley0 . runFederated0 remoteDomain
+
 runFederatedConcurrently ::
-  Member Concurrency r =>
+  Member FederatorAccess r =>
   (Foldable f, Functor f) =>
   f (Remote a) ->
-  (Remote [a] -> FederatedGalleyRPC c r b) ->
+  (Remote [a] -> FederatedGalleyRPC c b) ->
   Galley r [Remote b]
-runFederatedConcurrently xs rpc =
+runFederatedConcurrently xs rpc = liftGalley0 $
   pooledForConcurrentlyN 8 (bucketRemote xs) $ \r ->
-    qualifyAs r <$> runFederated (tDomain r) (rpc r)
+    qualifyAs r <$> runFederated0 (tDomain r) (rpc r)
 
 runFederatedConcurrently_ ::
-  Member Concurrency r =>
+  Member FederatorAccess r =>
   (Foldable f, Functor f) =>
   f (Remote a) ->
-  (Remote [a] -> FederatedGalleyRPC c r ()) ->
+  (Remote [a] -> FederatedGalleyRPC c ()) ->
   Galley r ()
 runFederatedConcurrently_ xs = void . runFederatedConcurrently xs
 
@@ -790,7 +807,7 @@ fromNewRemoteConversation loc rc@NewRemoteConversation {..} =
 
 -- | Notify remote users of being added to a new conversation
 registerRemoteConversationMemberships ::
-  Member Concurrency r =>
+  Member FederatorAccess r =>
   -- | The time stamp when the conversation was created
   UTCTime ->
   -- | The domain of the user that created the conversation

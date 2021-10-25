@@ -68,7 +68,7 @@ import Wire.API.Routes.Public.Galley.Responses (RemoveFromConversationError (..)
 import Wire.API.ServantProto (FromProto (..))
 import Wire.API.User.Client (userClientMap)
 
-federationSitemap :: ServerT (ToServantApi FederationAPIGalley.Api) Galley0
+federationSitemap :: ServerT (ToServantApi FederationAPIGalley.Api) (Galley GalleyEffects)
 federationSitemap =
   genericServerT $
     FederationAPIGalley.Api
@@ -81,7 +81,7 @@ federationSitemap =
       }
 
 onConversationCreated ::
-  Member Concurrency r =>
+  Members '[GundeckAccess, ExternalAccess] r =>
   Domain ->
   NewRemoteConversation ConvId ->
   Galley r ()
@@ -135,7 +135,7 @@ getLocalUsers localDomain = map qUnqualified . filter ((== localDomain) . qDomai
 -- | Update the local database with information on conversation members joining
 -- or leaving. Finally, push out notifications to local users.
 onConversationUpdated ::
-  Member Concurrency r =>
+  Members '[GundeckAccess, ExternalAccess] r =>
   Domain ->
   ConversationUpdate ->
   Galley r ()
@@ -220,7 +220,7 @@ addLocalUsersToRemoteConv remoteConvId qAdder localUsers = do
 
 -- FUTUREWORK: actually return errors as part of the response instead of throwing
 leaveConversation ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Domain ->
   LeaveConversationRequest ->
   Galley r LeaveConversationResponse
@@ -241,7 +241,7 @@ leaveConversation requestingDomain lc = do
 -- FUTUREWORK: report errors to the originating backend
 -- FUTUREWORK: error handling for missing / mismatched clients
 onMessageSent ::
-  Member Concurrency r =>
+  Members '[BotAccess, GundeckAccess, ExternalAccess] r =>
   Domain ->
   RemoteMessage ConvId ->
   Galley r ()
@@ -281,7 +281,11 @@ onMessageSent domain rmUnqualified = do
             lmConvRoleName = Public.roleNameWireMember
           }
 
-sendMessage :: Member Concurrency r => Domain -> MessageSendRequest -> Galley r MessageSendResponse
+sendMessage ::
+  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
+  Domain ->
+  MessageSendRequest ->
+  Galley r MessageSendResponse
 sendMessage originDomain msr = do
   let sender = Qualified (msrSender msr) originDomain
   msg <- either err pure (fromProto (fromBase64ByteString (msrRawMessage msr)))

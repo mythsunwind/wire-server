@@ -132,7 +132,7 @@ getSettings zusr tid = do
     (True, Just result) -> viewLegalHoldService result
 
 removeSettingsH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ::: TeamId ::: JsonRequest Public.RemoveLegalHoldSettingsRequest ::: JSON ->
   Galley r Response
 removeSettingsH (zusr ::: tid ::: req ::: _) = do
@@ -141,7 +141,7 @@ removeSettingsH (zusr ::: tid ::: req ::: _) = do
   pure noContent
 
 removeSettings ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   TeamId ->
   Public.RemoveLegalHoldSettingsRequest ->
@@ -169,7 +169,7 @@ removeSettings zusr tid (Public.RemoveLegalHoldSettingsRequest mPassword) = do
 -- | Remove legal hold settings from team; also disabling for all users and removing LH devices
 removeSettings' ::
   forall r.
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   TeamId ->
   Galley r ()
 removeSettings' tid = do
@@ -184,8 +184,7 @@ removeSettings' tid = do
       Log.debug $
         Log.field "targets" (toByteString . show $ toByteString <$> zothers)
           . Log.field "action" (Log.val "LegalHold.removeSettings'")
-      -- I picked this number by fair dice roll, feel free to change it :P
-      pooledMapConcurrentlyN_ 8 removeLHForUser lhMembers
+      fireAndForgetMany (map removeLHForUser lhMembers)
     removeLHForUser :: TeamMember -> Galley r ()
     removeLHForUser member = do
       let uid = member ^. Team.userId
@@ -228,7 +227,10 @@ getUserStatus tid uid = do
 -- | Change 'UserLegalHoldStatus' from no consent to disabled.  FUTUREWORK:
 -- @withdrawExplicitConsentH@ (lots of corner cases we'd have to implement for that to pan
 -- out).
-grantConsentH :: Member Concurrency r => UserId ::: TeamId ::: JSON -> Galley r Response
+grantConsentH ::
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  UserId ::: TeamId ::: JSON ->
+  Galley r Response
 grantConsentH (zusr ::: tid ::: _) = do
   grantConsent zusr tid >>= \case
     GrantConsentSuccess -> pure $ empty & setStatus status201
@@ -239,7 +241,7 @@ data GrantConsentResult
   | GrantConsentAlreadyGranted
 
 grantConsent ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   TeamId ->
   Galley r GrantConsentResult
@@ -256,7 +258,7 @@ grantConsent zusr tid = do
 
 -- | Request to provision a device on the legal hold service for a user
 requestDeviceH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ::: TeamId ::: UserId ::: JSON ->
   Galley r Response
 requestDeviceH (zusr ::: tid ::: uid ::: _) = do
@@ -270,7 +272,7 @@ data RequestDeviceResult
 
 requestDevice ::
   forall r.
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   TeamId ->
   UserId ->
@@ -317,7 +319,7 @@ requestDevice zusr tid uid = do
 -- it gets interupted. There's really no reason to delete them anyways
 -- since they are replaced if needed when registering new LH devices.
 approveDeviceH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ::: TeamId ::: UserId ::: ConnId ::: JsonRequest Public.ApproveLegalHoldForUserRequest ::: JSON ->
   Galley r Response
 approveDeviceH (zusr ::: tid ::: uid ::: connId ::: req ::: _) = do
@@ -326,7 +328,7 @@ approveDeviceH (zusr ::: tid ::: uid ::: connId ::: req ::: _) = do
   pure empty
 
 approveDevice ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   TeamId ->
   UserId ->
@@ -370,7 +372,7 @@ approveDevice zusr tid uid connId (Public.ApproveLegalHoldForUserRequest mPasswo
         UserLegalHoldNoConsent -> throwM userLegalHoldNotPending
 
 disableForUserH ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ::: TeamId ::: UserId ::: JsonRequest Public.DisableLegalHoldForUserRequest ::: JSON ->
   Galley r Response
 disableForUserH (zusr ::: tid ::: uid ::: req ::: _) = do
@@ -385,7 +387,7 @@ data DisableLegalHoldForUserResponse
 
 disableForUser ::
   forall r.
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   TeamId ->
   UserId ->
@@ -417,7 +419,7 @@ disableForUser zusr tid uid (Public.DisableLegalHoldForUserRequest mPassword) = 
 -- or disabled, make sure the affected connections are screened for policy conflict (anybody
 -- with no-consent), and put those connections in the appropriate blocked state.
 changeLegalholdStatus ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   TeamId ->
   UserId ->
   UserLegalHoldStatus ->
@@ -527,7 +529,11 @@ getTeamLegalholdWhitelistedH tid = do
 -- which may cause wrong behavior.  In order to guarantee correct behavior, the first argument
 -- contains the hypothetical new LH status of `uid`'s so it can be consulted instead of the
 -- one from the database.
-handleGroupConvPolicyConflicts :: Member Concurrency r => UserId -> UserLegalHoldStatus -> Galley r ()
+handleGroupConvPolicyConflicts ::
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  UserId ->
+  UserLegalHoldStatus ->
+  Galley r ()
 handleGroupConvPolicyConflicts uid hypotheticalLHStatus =
   void $
     iterateConversations uid (toRange (Proxy @500)) $ \convs -> do

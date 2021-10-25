@@ -55,15 +55,10 @@ module Galley.App
     currentFanoutLimit,
 
     -- * MonadUnliftIO / Sem compatibility
-    async,
-    forkIO,
-    mapConcurrently,
-    wait,
-    pooledForConcurrentlyN_,
-    pooledForConcurrentlyN,
-    pooledMapConcurrentlyN_,
-    pooledMapConcurrentlyN,
-    concurrently,
+    fireAndForget,
+    fireAndForgetMany,
+    liftGalley0,
+    interpretGalleyToGalley0,
   )
 where
 
@@ -114,8 +109,8 @@ import qualified Servant
 import Ssl.Util
 import System.Logger.Class hiding (Error, info)
 import qualified System.Logger.Extended as Logger
-import qualified UnliftIO as U
-import qualified UnliftIO.Concurrent as U
+import UnliftIO.Async (pooledMapConcurrentlyN_)
+import UnliftIO.Concurrent (forkIO)
 import Util.Options
 import Wire.API.Federation.Client (HasFederatorConfig (..))
 
@@ -147,7 +142,7 @@ makeLenses ''Env
 
 makeLenses ''ExtEnv
 
-type Galley0 = Galley GalleyEffects
+type Galley0 = Galley '[]
 
 newtype Galley (r :: EffectRow) a = Galley
   { unGalley :: ReaderT Env Client a
@@ -283,12 +278,12 @@ initExtEnv = do
       let pinset = map toByteString' fprs
        in verifyRsaFingerprint sha pinset
 
-runGalley :: (r ~ GalleyEffects) => Env -> Request -> Galley r a -> IO a
+runGalley :: Env -> Request -> Galley GalleyEffects a -> IO a
 runGalley e r m =
   let e' = reqId .~ lookupReqId r $ e
    in evalGalley e' m
 
-evalGalley :: (r ~ GalleyEffects) => Env -> Galley r a -> IO a
+evalGalley :: Env -> Galley GalleyEffects a -> IO a
 evalGalley e m = runClient (e ^. cstate) (runReaderT (unGalley m) e)
 
 lookupReqId :: Request -> RequestId
@@ -316,7 +311,7 @@ ifNothing :: Error -> Maybe a -> Galley r a
 ifNothing e = maybe (throwM e) return
 {-# INLINE ifNothing #-}
 
-toServantHandler :: (r ~ GalleyEffects) => Env -> Galley r a -> Servant.Handler a
+toServantHandler :: Env -> (Galley GalleyEffects) a -> Servant.Handler a
 toServantHandler env galley = do
   eith <- liftIO $ try (evalGalley env galley)
   case eith of
@@ -336,55 +331,20 @@ toServantHandler env galley = do
 --------------------------------------------------------------------------------
 -- temporary MonadUnliftIO support code for the polysemy refactoring
 
--- FUTUREWORK: move these functions to the Concurrency effect
+fireAndForget :: Member FireAndForget r => Galley r () -> Galley r ()
+fireAndForget = Galley . void . forkIO . unGalley
 
-async :: Member Concurrency r => Galley r a -> Galley r (U.Async a)
-async = Galley . U.async . unGalley
+fireAndForgetMany :: Member FireAndForget r => [Galley r ()] -> Galley r ()
+-- I picked this number by fair dice roll, feel free to change it :P
+fireAndForgetMany = Galley . pooledMapConcurrentlyN_ 8 unGalley
 
-forkIO :: Member Concurrency r => Galley r () -> Galley r ThreadId
-forkIO = Galley . U.forkIO . unGalley
+instance MonadUnliftIO Galley0 where
+  askUnliftIO = do
+    f <- Galley askUnliftIO
+    pure (UnliftIO (unliftIO f . unGalley))
 
-mapConcurrently ::
-  (Member Concurrency r, Traversable t) =>
-  (a -> Galley r b) ->
-  t a ->
-  Galley r (t b)
-mapConcurrently f = Galley . U.mapConcurrently (unGalley . f)
+liftGalley0 :: Galley0 a -> Galley r a
+liftGalley0 = Galley . unGalley
 
-wait :: Member Concurrency r => U.Async a -> Galley r a
-wait = Galley . U.wait
-
-pooledMapConcurrentlyN ::
-  (Member Concurrency r, Traversable t) =>
-  Int ->
-  (a -> Galley r b) ->
-  t a ->
-  Galley r (t b)
-pooledMapConcurrentlyN n f = Galley . U.pooledMapConcurrentlyN n (unGalley . f)
-
-pooledMapConcurrentlyN_ ::
-  (Member Concurrency r, Traversable t) =>
-  Int ->
-  (a -> Galley r ()) ->
-  t a ->
-  Galley r ()
-pooledMapConcurrentlyN_ n f = void . pooledMapConcurrentlyN n f
-
-pooledForConcurrentlyN ::
-  (Member Concurrency r, Traversable t) =>
-  Int ->
-  t a ->
-  (a -> Galley r b) ->
-  Galley r (t b)
-pooledForConcurrentlyN n = flip (pooledMapConcurrentlyN n)
-
-pooledForConcurrentlyN_ ::
-  (Member Concurrency r, Traversable t) =>
-  Int ->
-  t a ->
-  (a -> Galley r ()) ->
-  Galley r ()
-pooledForConcurrentlyN_ n t = void . pooledForConcurrentlyN n t
-
-concurrently :: Member Concurrency r => Galley r a -> Galley r b -> Galley r (a, b)
-concurrently a b = Galley $ U.concurrently (unGalley a) (unGalley b)
+interpretGalleyToGalley0 :: Galley GalleyEffects a -> Galley0 a
+interpretGalleyToGalley0 = Galley . unGalley

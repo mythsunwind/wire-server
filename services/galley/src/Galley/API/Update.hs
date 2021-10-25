@@ -135,11 +135,11 @@ import Wire.API.ServantProto (RawProto (..))
 import Wire.API.Team.LegalHold (LegalholdProtectee (..))
 import Wire.API.User.Client
 
-acceptConvH :: Member Concurrency r => UserId ::: Maybe ConnId ::: ConvId -> Galley r Response
+acceptConvH :: Member GundeckAccess r => UserId ::: Maybe ConnId ::: ConvId -> Galley r Response
 acceptConvH (usr ::: conn ::: cnv) =
   setStatus status200 . json <$> acceptConv usr conn cnv
 
-acceptConv :: Member Concurrency r => UserId -> Maybe ConnId -> ConvId -> Galley r Conversation
+acceptConv :: Member GundeckAccess r => UserId -> Maybe ConnId -> ConvId -> Galley r Conversation
 acceptConv usr conn cnv = do
   conv <- Data.conversation cnv >>= ifNothing (errorDescriptionTypeToWai @ConvNotFound)
   conv' <- acceptOne2One usr conv conn
@@ -158,11 +158,19 @@ blockConv zusr cnv = do
   let mems = Data.convLocalMembers conv
   when (zusr `isMember` mems) $ Data.removeMember zusr cnv
 
-unblockConvH :: Member Concurrency r => UserId ::: Maybe ConnId ::: ConvId -> Galley r Response
+unblockConvH ::
+  Member GundeckAccess r =>
+  UserId ::: Maybe ConnId ::: ConvId ->
+  Galley r Response
 unblockConvH (usr ::: conn ::: cnv) =
   setStatus status200 . json <$> unblockConv usr conn cnv
 
-unblockConv :: Member Concurrency r => UserId -> Maybe ConnId -> ConvId -> Galley r Conversation
+unblockConv ::
+  Member GundeckAccess r =>
+  UserId ->
+  Maybe ConnId ->
+  ConvId ->
+  Galley r Conversation
 unblockConv usr conn cnv = do
   conv <- Data.conversation cnv >>= ifNothing (errorDescriptionTypeToWai @ConvNotFound)
   unless (Data.convType conv `elem` [ConnectConv, One2OneConv]) $
@@ -179,7 +187,7 @@ handleUpdateResult = \case
   Unchanged -> empty & setStatus status204
 
 updateConversationAccess ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -195,7 +203,7 @@ updateConversationAccess usr con qcnv update = do
   doUpdate qcnv lusr con update
 
 updateConversationAccessUnqualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -207,7 +215,7 @@ updateConversationAccessUnqualified usr zcon cnv update = do
   updateLocalConversationAccess lcnv lusr zcon update
 
 updateLocalConversationAccess ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -228,7 +236,7 @@ updateRemoteConversationAccess ::
 updateRemoteConversationAccess _ _ _ _ = throwM federationNotImplemented
 
 performAccessUpdateAction ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Qualified UserId ->
   Data.Conversation ->
   ConversationAccessData ->
@@ -253,7 +261,7 @@ performAccessUpdateAction qusr conv target = do
 
   -- Update Cassandra
   lift $ Data.updateConversationAccess (tUnqualified lcnv) target
-  lift . void . forkIO $ do
+  lift . fireAndForget $ do
     -- Remove bots
     traverse_ (deleteBot (tUnqualified lcnv)) (map botMemId (toList (bmBots toRemove)))
 
@@ -292,7 +300,7 @@ performAccessUpdateAction qusr conv target = do
         _ -> pure bm
 
 updateConversationReceiptMode ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -308,7 +316,7 @@ updateConversationReceiptMode usr zcon qcnv update = do
   doUpdate qcnv lusr zcon update
 
 updateConversationReceiptModeUnqualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -320,7 +328,7 @@ updateConversationReceiptModeUnqualified usr zcon cnv update = do
   updateLocalConversationReceiptMode lcnv lusr zcon update
 
 updateLocalConversationReceiptMode ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -340,7 +348,7 @@ updateRemoteConversationReceiptMode ::
 updateRemoteConversationReceiptMode _ _ _ _ = throwM federationNotImplemented
 
 updateConversationMessageTimerUnqualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -352,7 +360,7 @@ updateConversationMessageTimerUnqualified usr zcon cnv update = do
   updateLocalConversationMessageTimer lusr zcon lcnv update
 
 updateConversationMessageTimer ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -368,7 +376,7 @@ updateConversationMessageTimer usr zcon qcnv update = do
     update
 
 updateLocalConversationMessageTimer ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -380,7 +388,7 @@ updateLocalConversationMessageTimer lusr con lcnv update =
       ConversationActionMessageTimerUpdate update
 
 deleteLocalConversation ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -391,7 +399,7 @@ deleteLocalConversation lusr con lcnv =
 
 -- | Update a local conversation, and notify all local and remote members.
 updateLocalConversation ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local ConvId ->
   Qualified UserId ->
   Maybe ConnId ->
@@ -427,7 +435,7 @@ getUpdateResult = fmap (maybe Unchanged Updated) . runMaybeT
 -- | Perform a conversation action, and return extra notification targets and
 -- an updated action.
 performAction ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Qualified UserId ->
   Data.Conversation ->
   ConversationAction ->
@@ -466,7 +474,10 @@ performAction qusr conv action = case action of
       Just tid -> Data.removeTeamConv tid cid
     pure (mempty, action)
 
-addCodeH :: Member Concurrency r => UserId ::: ConnId ::: ConvId -> Galley r Response
+addCodeH ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ::: ConnId ::: ConvId ->
+  Galley r Response
 addCodeH (usr ::: zcon ::: cnv) =
   addCode usr zcon cnv <&> \case
     CodeAdded event -> json event & setStatus status201
@@ -476,7 +487,13 @@ data AddCodeResult
   = CodeAdded Public.Event
   | CodeAlreadyExisted Public.ConversationCode
 
-addCode :: forall r. Member Concurrency r => UserId -> ConnId -> ConvId -> Galley r AddCodeResult
+addCode ::
+  forall r.
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ->
+  ConnId ->
+  ConvId ->
+  Galley r AddCodeResult
 addCode usr zcon cnv = do
   localDomain <- viewFederationDomain
   let qcnv = Qualified cnv localDomain
@@ -505,11 +522,19 @@ addCode usr zcon cnv = do
       urlPrefix <- view $ options . optSettings . setConversationCodeURI
       return $ mkConversationCode (codeKey code) (codeValue code) urlPrefix
 
-rmCodeH :: Member Concurrency r => UserId ::: ConnId ::: ConvId -> Galley r Response
+rmCodeH ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ::: ConnId ::: ConvId ->
+  Galley r Response
 rmCodeH (usr ::: zcon ::: cnv) =
   setStatus status200 . json <$> rmCode usr zcon cnv
 
-rmCode :: Member Concurrency r => UserId -> ConnId -> ConvId -> Galley r Public.Event
+rmCode ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ->
+  ConnId ->
+  ConvId ->
+  Galley r Public.Event
 rmCode usr zcon cnv = do
   localDomain <- viewFederationDomain
   let qcnv = Qualified cnv localDomain
@@ -556,7 +581,7 @@ checkReusableCode convCode =
   void $ verifyReusableCode convCode
 
 joinConversationByReusableCodeH ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: JsonRequest Public.ConversationCode ->
   Galley r Response
 joinConversationByReusableCodeH (zusr ::: zcon ::: req) = do
@@ -564,7 +589,7 @@ joinConversationByReusableCodeH (zusr ::: zcon ::: req) = do
   handleUpdateResult <$> joinConversationByReusableCode zusr zcon convCode
 
 joinConversationByReusableCode ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Public.ConversationCode ->
@@ -574,14 +599,14 @@ joinConversationByReusableCode zusr zcon convCode = do
   joinConversation zusr zcon (codeConversation c) CodeAccess
 
 joinConversationByIdH ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: ConvId ::: JSON ->
   Galley r Response
 joinConversationByIdH (zusr ::: zcon ::: cnv ::: _) =
   handleUpdateResult <$> joinConversationById zusr zcon cnv
 
 joinConversationById ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -590,7 +615,7 @@ joinConversationById zusr zcon cnv =
   joinConversation zusr zcon cnv LinkAccess
 
 joinConversation ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -633,7 +658,7 @@ addMembersToLocalConversation lcnv users role = do
 
 performAddMemberAction ::
   forall r.
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Qualified UserId ->
   Data.Conversation ->
   NonEmpty (Qualified UserId) ->
@@ -720,7 +745,7 @@ performAddMemberAction qusr conv invited role = do
     checkLHPolicyConflictsRemote _remotes = pure ()
 
 addMembersUnqualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -731,7 +756,7 @@ addMembersUnqualified zusr zcon cnv (Public.Invite users role) = do
   addMembers zusr zcon cnv (Public.InviteQualified qusers role)
 
 addMembers ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -745,7 +770,7 @@ addMembers zusr zcon cnv (Public.InviteQualified users role) = do
       ConversationActionAddMembers users role
 
 updateSelfMember ::
-  Member Concurrency r =>
+  Members '[GundeckAccess, ExternalAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -779,7 +804,7 @@ updateSelfMember zusr zcon qcnv update = do
         }
 
 updateUnqualifiedSelfMember ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -790,7 +815,7 @@ updateUnqualifiedSelfMember zusr zcon cnv update = do
   updateSelfMember zusr zcon (qUntagged lcnv) update
 
 updateOtherMemberUnqualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -804,7 +829,7 @@ updateOtherMemberUnqualified zusr zcon cnv victim update = do
   updateOtherMemberLocalConv lcnv lusr zcon (qUntagged lvictim) update
 
 updateOtherMember ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -817,7 +842,7 @@ updateOtherMember zusr zcon qcnv qvictim update = do
   doUpdate qcnv lusr zcon qvictim update
 
 updateOtherMemberLocalConv ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -840,7 +865,7 @@ updateOtherMemberRemoteConv ::
 updateOtherMemberRemoteConv _ _ _ _ _ = throwM federationNotImplemented
 
 removeMemberUnqualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -852,7 +877,7 @@ removeMemberUnqualified zusr con cnv victim = do
   removeMemberQualified zusr con (qUntagged lcnv) (qUntagged lvictim)
 
 removeMemberQualified ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -863,6 +888,7 @@ removeMemberQualified zusr con qcnv victim = do
   foldQualified lusr removeMemberFromLocalConv removeMemberFromRemoteConv qcnv lusr (Just con) victim
 
 removeMemberFromRemoteConv ::
+  Member FederatorAccess r =>
   Remote ConvId ->
   Local UserId ->
   Maybe ConnId ->
@@ -899,7 +925,7 @@ performRemoveMemberAction conv victims = do
 
 -- | Remove a member from a local conversation.
 removeMemberFromLocalConv ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local ConvId ->
   Local UserId ->
   Maybe ConnId ->
@@ -930,7 +956,7 @@ handleOtrResult = \case
   OtrConversationNotFound _ -> throwErrorDescriptionType @ConvNotFound
 
 postBotMessageH ::
-  Member Concurrency r =>
+  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   BotId ::: ConvId ::: Public.OtrFilterMissing ::: JsonRequest Public.NewOtrMessage ::: JSON ->
   Galley r Response
 postBotMessageH (zbot ::: zcnv ::: val ::: req ::: _) = do
@@ -939,7 +965,7 @@ postBotMessageH (zbot ::: zcnv ::: val ::: req ::: _) = do
   handleOtrResult =<< postBotMessage zbot zcnv val' message
 
 postBotMessage ::
-  Member Concurrency r =>
+  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   BotId ->
   ConvId ->
   Public.OtrFilterMissing ->
@@ -949,7 +975,7 @@ postBotMessage zbot zcnv val message =
   postNewOtrMessage Bot (botUserId zbot) Nothing zcnv val message
 
 postProteusMessage ::
-  Member Concurrency r =>
+  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -963,7 +989,7 @@ postProteusMessage zusr zcon conv msg = do
     else postQualifiedOtrMessage User sender (Just zcon) (qUnqualified conv) (rpValue msg)
 
 postOtrMessageUnqualified ::
-  Member Concurrency r =>
+  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -998,7 +1024,7 @@ postOtrMessageUnqualified zusr zcon cnv ignoreMissing reportMissing message = do
     <$> postQualifiedOtrMessage User sender (Just zcon) cnv qualifiedMessage
 
 postProtoOtrBroadcastH ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ::: ConnId ::: Public.OtrFilterMissing ::: Request ::: JSON ->
   Galley r Response
 postProtoOtrBroadcastH (zusr ::: zcon ::: val ::: req ::: _) = do
@@ -1007,7 +1033,7 @@ postProtoOtrBroadcastH (zusr ::: zcon ::: val ::: req ::: _) = do
   handleOtrResult =<< postOtrBroadcast zusr zcon val' message
 
 postOtrBroadcastH ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ::: ConnId ::: Public.OtrFilterMissing ::: JsonRequest Public.NewOtrMessage ->
   Galley r Response
 postOtrBroadcastH (zusr ::: zcon ::: val ::: req) = do
@@ -1016,7 +1042,7 @@ postOtrBroadcastH (zusr ::: zcon ::: val ::: req) = do
   handleOtrResult =<< postOtrBroadcast zusr zcon val' message
 
 postOtrBroadcast ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ->
   ConnId ->
   Public.OtrFilterMissing ->
@@ -1036,7 +1062,7 @@ allowOtrFilterMissingInBody val (NewOtrMessage _ _ _ _ _ _ mrepmiss) = case mrep
 
 -- | bots are not supported on broadcast
 postNewOtrBroadcast ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ->
   Maybe ConnId ->
   OtrFilterMissing ->
@@ -1053,7 +1079,7 @@ postNewOtrBroadcast usr con val msg = do
     pushSome (catMaybes toUsers)
 
 postNewOtrMessage ::
-  Member Concurrency r =>
+  Members '[BotAccess, ExternalAccess, GundeckAccess] r =>
   UserType ->
   UserId ->
   Maybe ConnId ->
@@ -1071,9 +1097,7 @@ postNewOtrMessage utype usr con cnv val msg = do
   withValidOtrRecipients utype usr sender cnv recvrs val now $ \rs -> do
     let (toBots, toUsers) = foldr (newMessage qusr con (Just qcnv) msg now) ([], []) rs
     pushSome (catMaybes toUsers)
-    void . forkIO $ do
-      gone <- External.deliver toBots
-      mapM_ (deleteBot cnv . botMemId) gone
+    External.deliverAndDeleteAsync cnv toBots
 
 newMessage ::
   Qualified UserId ->
@@ -1111,7 +1135,7 @@ newMessage qusr con qcnv msg now (m, c, t) ~(toBots, toUsers) =
            in (toBots, p : toUsers)
 
 updateConversationName ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -1127,7 +1151,7 @@ updateConversationName zusr zcon qcnv convRename = do
     convRename
 
 updateUnqualifiedConversationName ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -1139,7 +1163,7 @@ updateUnqualifiedConversationName zusr zcon cnv rename = do
   updateLocalConversationName lusr zcon lcnv rename
 
 updateLocalConversationName ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -1152,7 +1176,7 @@ updateLocalConversationName lusr zcon lcnv convRename = do
     else Nothing <$ Data.deleteConversation (tUnqualified lcnv)
 
 updateLiveLocalConversationName ::
-  Member Concurrency r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -1164,7 +1188,7 @@ updateLiveLocalConversationName lusr con lcnv rename =
       ConversationActionRename rename
 
 notifyConversationMetadataUpdate ::
-  Member Concurrency r =>
+  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
   Qualified UserId ->
   Maybe ConnId ->
   Local ConvId ->
@@ -1177,21 +1201,15 @@ notifyConversationMetadataUpdate quid con (qUntagged -> qcnv) targets action = d
   let e = conversationActionToEvent now quid qcnv action
 
   -- notify remote participants
-  let rusersByDomain = bucketRemote (toList (bmRemotes targets))
-  void . pooledForConcurrentlyN 8 rusersByDomain $ \(qUntagged -> Qualified uids domain) -> do
-    let req = FederatedGalley.ConversationUpdate now quid (qUnqualified qcnv) uids action
-        rpc =
-          FederatedGalley.onConversationUpdated
-            FederatedGalley.clientRoutes
-            localDomain
-            req
-    runFederatedGalley domain rpc
+  runFederatedConcurrently_ (toList (bmRemotes targets)) $ \ruids ->
+    FederatedGalley.onConversationUpdated FederatedGalley.clientRoutes localDomain $
+      FederatedGalley.ConversationUpdate now quid (qUnqualified qcnv) (tUnqualified ruids) action
 
   -- notify local participants and bots
   pushConversationEvent con e (bmLocals targets) (bmBots targets) $> e
 
 isTypingH ::
-  Member Concurrency r =>
+  Member GundeckAccess r =>
   UserId ::: ConnId ::: ConvId ::: JsonRequest Public.TypingData ->
   Galley r Response
 isTypingH (zusr ::: zcon ::: cnv ::: req) = do
@@ -1199,7 +1217,13 @@ isTypingH (zusr ::: zcon ::: cnv ::: req) = do
   isTyping zusr zcon cnv typingData
   pure empty
 
-isTyping :: Member Concurrency r => UserId -> ConnId -> ConvId -> Public.TypingData -> Galley r ()
+isTyping ::
+  Member GundeckAccess r =>
+  UserId ->
+  ConnId ->
+  ConvId ->
+  Public.TypingData ->
+  Galley r ()
 isTyping zusr zcon cnv typingData = do
   localDomain <- viewFederationDomain
   let qcnv = Qualified cnv localDomain
@@ -1226,12 +1250,20 @@ rmServiceH req = do
   Data.deleteService =<< fromJsonBody req
   return empty
 
-addBotH :: Member Concurrency r => UserId ::: ConnId ::: JsonRequest AddBot -> Galley r Response
+addBotH ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ::: ConnId ::: JsonRequest AddBot ->
+  Galley r Response
 addBotH (zusr ::: zcon ::: req) = do
   bot <- fromJsonBody req
   json <$> addBot zusr zcon bot
 
-addBot :: Member Concurrency r => UserId -> ConnId -> AddBot -> Galley r Event
+addBot ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ->
+  ConnId ->
+  AddBot ->
+  Galley r Event
 addBot zusr zcon b = do
   lusr <- qualifyLocal zusr
   c <- Data.conversation (b ^. addBotConv) >>= ifNothing (errorDescriptionTypeToWai @ConvNotFound)
@@ -1243,7 +1275,7 @@ addBot zusr zcon b = do
   (e, bm) <- Data.addBotMember (qUntagged lusr) (b ^. addBotService) (b ^. addBotId) (b ^. addBotConv) t
   for_ (newPushLocal ListComplete zusr (ConvEvent e) (recipient <$> users)) $ \p ->
     push1 $ p & pushConn ?~ zcon
-  void . forkIO $ void $ External.deliver ((bm : bots) `zip` repeat e)
+  External.deliverAsync ((bm : bots) `zip` repeat e)
   pure e
   where
     regularConvChecks lusr c = do
@@ -1261,12 +1293,20 @@ addBot zusr zcon b = do
       when (maybe True (view managedConversation) tcv) $
         throwM noAddToManaged
 
-rmBotH :: Member Concurrency r => UserId ::: Maybe ConnId ::: JsonRequest RemoveBot -> Galley r Response
+rmBotH ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ::: Maybe ConnId ::: JsonRequest RemoveBot ->
+  Galley r Response
 rmBotH (zusr ::: zcon ::: req) = do
   bot <- fromJsonBody req
   handleUpdateResult <$> rmBot zusr zcon bot
 
-rmBot :: Member Concurrency r => UserId -> Maybe ConnId -> RemoveBot -> Galley r (UpdateResult Event)
+rmBot ::
+  Members '[ExternalAccess, GundeckAccess] r =>
+  UserId ->
+  Maybe ConnId ->
+  RemoveBot ->
+  Galley r (UpdateResult Event)
 rmBot zusr zcon b = do
   c <- Data.conversation (b ^. rmBotConv) >>= ifNothing (errorDescriptionTypeToWai @ConvNotFound)
   localDomain <- viewFederationDomain
@@ -1285,7 +1325,7 @@ rmBot zusr zcon b = do
         push1 $ p & pushConn .~ zcon
       Data.removeMember (botUserId (b ^. rmBotId)) (Data.convId c)
       Data.eraseClients (botUserId (b ^. rmBotId))
-      void . forkIO $ void $ External.deliver (bots `zip` repeat e)
+      External.deliverAsync (bots `zip` repeat e)
       pure $ Updated e
 
 -------------------------------------------------------------------------------
