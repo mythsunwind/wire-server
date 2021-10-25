@@ -462,7 +462,7 @@ sitemap = do
 
 rmUser ::
   forall r.
-  Members '[ExternalAccess, FederatorAccess, GundeckAccess] r =>
+  Members '[BrigAccess, ExternalAccess, FederatorAccess, GundeckAccess] r =>
   UserId ->
   Maybe ConnId ->
   Galley r ()
@@ -526,7 +526,10 @@ rmUser user conn = do
       for_ cids $ \cid ->
         Update.removeMemberFromRemoteConv cid lusr Nothing (qUntagged lusr)
 
-deleteLoop :: forall r. Members '[ExternalAccess, GundeckAccess] r => Galley r ()
+deleteLoop ::
+  forall r.
+  Members '[BrigAccess, ExternalAccess, GundeckAccess, SparAccess] r =>
+  Galley r ()
 deleteLoop = do
   q <- view deleteQueue
   safeForever "deleteLoop" $ do
@@ -547,7 +550,10 @@ safeForever funName action =
       err $ "error" .= show exc ~~ msg (val $ cs funName <> " failed")
       threadDelay 60000000 -- pause to keep worst-case noise in logs manageable
 
-guardLegalholdPolicyConflictsH :: (JsonRequest GuardLegalholdPolicyConflicts ::: JSON) -> Galley r Response
+guardLegalholdPolicyConflictsH ::
+  Member BrigAccess r =>
+  (JsonRequest GuardLegalholdPolicyConflicts ::: JSON) ->
+  Galley r Response
 guardLegalholdPolicyConflictsH (req ::: _) = do
   glh <- fromJsonBody req
   guardLegalholdPolicyConflicts (glhProtectee glh) (glhUserClients glh)

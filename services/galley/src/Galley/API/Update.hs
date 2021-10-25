@@ -187,7 +187,7 @@ handleUpdateResult = \case
   Unchanged -> empty & setStatus status204
 
 updateConversationAccess ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -203,7 +203,7 @@ updateConversationAccess usr con qcnv update = do
   doUpdate qcnv lusr con update
 
 updateConversationAccessUnqualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -215,7 +215,7 @@ updateConversationAccessUnqualified usr zcon cnv update = do
   updateLocalConversationAccess lcnv lusr zcon update
 
 updateLocalConversationAccess ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -236,7 +236,8 @@ updateRemoteConversationAccess ::
 updateRemoteConversationAccess _ _ _ _ = throwM federationNotImplemented
 
 performAccessUpdateAction ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  forall r.
+  Members '[BrigAccess, BotAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
   Qualified UserId ->
   Data.Conversation ->
   ConversationAccessData ->
@@ -300,7 +301,7 @@ performAccessUpdateAction qusr conv target = do
         _ -> pure bm
 
 updateConversationReceiptMode ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -316,7 +317,7 @@ updateConversationReceiptMode usr zcon qcnv update = do
   doUpdate qcnv lusr zcon update
 
 updateConversationReceiptModeUnqualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -328,7 +329,7 @@ updateConversationReceiptModeUnqualified usr zcon cnv update = do
   updateLocalConversationReceiptMode lcnv lusr zcon update
 
 updateLocalConversationReceiptMode ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -348,7 +349,7 @@ updateRemoteConversationReceiptMode ::
 updateRemoteConversationReceiptMode _ _ _ _ = throwM federationNotImplemented
 
 updateConversationMessageTimerUnqualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -360,7 +361,7 @@ updateConversationMessageTimerUnqualified usr zcon cnv update = do
   updateLocalConversationMessageTimer lusr zcon lcnv update
 
 updateConversationMessageTimer ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -376,7 +377,7 @@ updateConversationMessageTimer usr zcon qcnv update = do
     update
 
 updateLocalConversationMessageTimer ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -388,7 +389,7 @@ updateLocalConversationMessageTimer lusr con lcnv update =
       ConversationActionMessageTimerUpdate update
 
 deleteLocalConversation ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -397,9 +398,18 @@ deleteLocalConversation lusr con lcnv =
   getUpdateResult $
     updateLocalConversation lcnv (qUntagged lusr) (Just con) ConversationActionDelete
 
+type UpdateConversationActions =
+  '[ BotAccess,
+     BrigAccess,
+     ExternalAccess,
+     FederatorAccess,
+     FireAndForget,
+     GundeckAccess
+   ]
+
 -- | Update a local conversation, and notify all local and remote members.
 updateLocalConversation ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local ConvId ->
   Qualified UserId ->
   Maybe ConnId ->
@@ -435,7 +445,7 @@ getUpdateResult = fmap (maybe Unchanged Updated) . runMaybeT
 -- | Perform a conversation action, and return extra notification targets and
 -- an updated action.
 performAction ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Qualified UserId ->
   Data.Conversation ->
   ConversationAction ->
@@ -581,7 +591,7 @@ checkReusableCode convCode =
   void $ verifyReusableCode convCode
 
 joinConversationByReusableCodeH ::
-  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
+  Members '[BrigAccess, FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: JsonRequest Public.ConversationCode ->
   Galley r Response
 joinConversationByReusableCodeH (zusr ::: zcon ::: req) = do
@@ -589,7 +599,7 @@ joinConversationByReusableCodeH (zusr ::: zcon ::: req) = do
   handleUpdateResult <$> joinConversationByReusableCode zusr zcon convCode
 
 joinConversationByReusableCode ::
-  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
+  Members '[BrigAccess, FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Public.ConversationCode ->
@@ -599,14 +609,14 @@ joinConversationByReusableCode zusr zcon convCode = do
   joinConversation zusr zcon (codeConversation c) CodeAccess
 
 joinConversationByIdH ::
-  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
+  Members '[BrigAccess, FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: ConvId ::: JSON ->
   Galley r Response
 joinConversationByIdH (zusr ::: zcon ::: cnv ::: _) =
   handleUpdateResult <$> joinConversationById zusr zcon cnv
 
 joinConversationById ::
-  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
+  Members '[BrigAccess, FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -615,7 +625,7 @@ joinConversationById zusr zcon cnv =
   joinConversation zusr zcon cnv LinkAccess
 
 joinConversation ::
-  Members '[FederatorAccess, ExternalAccess, GundeckAccess] r =>
+  Members '[BrigAccess, FederatorAccess, ExternalAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -658,7 +668,7 @@ addMembersToLocalConversation lcnv users role = do
 
 performAddMemberAction ::
   forall r.
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Qualified UserId ->
   Data.Conversation ->
   NonEmpty (Qualified UserId) ->
@@ -745,7 +755,7 @@ performAddMemberAction qusr conv invited role = do
     checkLHPolicyConflictsRemote _remotes = pure ()
 
 addMembersUnqualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -756,7 +766,7 @@ addMembersUnqualified zusr zcon cnv (Public.Invite users role) = do
   addMembers zusr zcon cnv (Public.InviteQualified qusers role)
 
 addMembers ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -804,7 +814,7 @@ updateSelfMember zusr zcon qcnv update = do
         }
 
 updateUnqualifiedSelfMember ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -815,7 +825,7 @@ updateUnqualifiedSelfMember zusr zcon cnv update = do
   updateSelfMember zusr zcon (qUntagged lcnv) update
 
 updateOtherMemberUnqualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -829,7 +839,7 @@ updateOtherMemberUnqualified zusr zcon cnv victim update = do
   updateOtherMemberLocalConv lcnv lusr zcon (qUntagged lvictim) update
 
 updateOtherMember ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -842,7 +852,7 @@ updateOtherMember zusr zcon qcnv qvictim update = do
   doUpdate qcnv lusr zcon qvictim update
 
 updateOtherMemberLocalConv ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local ConvId ->
   Local UserId ->
   ConnId ->
@@ -865,7 +875,7 @@ updateOtherMemberRemoteConv ::
 updateOtherMemberRemoteConv _ _ _ _ _ = throwM federationNotImplemented
 
 removeMemberUnqualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -877,7 +887,7 @@ removeMemberUnqualified zusr con cnv victim = do
   removeMemberQualified zusr con (qUntagged lcnv) (qUntagged lvictim)
 
 removeMemberQualified ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -925,7 +935,7 @@ performRemoveMemberAction conv victims = do
 
 -- | Remove a member from a local conversation.
 removeMemberFromLocalConv ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local ConvId ->
   Local UserId ->
   Maybe ConnId ->
@@ -956,7 +966,7 @@ handleOtrResult = \case
   OtrConversationNotFound _ -> throwErrorDescriptionType @ConvNotFound
 
 postBotMessageH ::
-  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
+  Members '[BotAccess, BrigAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   BotId ::: ConvId ::: Public.OtrFilterMissing ::: JsonRequest Public.NewOtrMessage ::: JSON ->
   Galley r Response
 postBotMessageH (zbot ::: zcnv ::: val ::: req ::: _) = do
@@ -965,7 +975,7 @@ postBotMessageH (zbot ::: zcnv ::: val ::: req ::: _) = do
   handleOtrResult =<< postBotMessage zbot zcnv val' message
 
 postBotMessage ::
-  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
+  Members '[BotAccess, BrigAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   BotId ->
   ConvId ->
   Public.OtrFilterMissing ->
@@ -975,7 +985,7 @@ postBotMessage zbot zcnv val message =
   postNewOtrMessage Bot (botUserId zbot) Nothing zcnv val message
 
 postProteusMessage ::
-  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
+  Members '[BotAccess, BrigAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -989,7 +999,7 @@ postProteusMessage zusr zcon conv msg = do
     else postQualifiedOtrMessage User sender (Just zcon) (qUnqualified conv) (rpValue msg)
 
 postOtrMessageUnqualified ::
-  Members '[BotAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
+  Members '[BotAccess, BrigAccess, FederatorAccess, GundeckAccess, ExternalAccess] r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -1024,7 +1034,7 @@ postOtrMessageUnqualified zusr zcon cnv ignoreMissing reportMissing message = do
     <$> postQualifiedOtrMessage User sender (Just zcon) cnv qualifiedMessage
 
 postProtoOtrBroadcastH ::
-  Member GundeckAccess r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: Public.OtrFilterMissing ::: Request ::: JSON ->
   Galley r Response
 postProtoOtrBroadcastH (zusr ::: zcon ::: val ::: req ::: _) = do
@@ -1033,7 +1043,7 @@ postProtoOtrBroadcastH (zusr ::: zcon ::: val ::: req ::: _) = do
   handleOtrResult =<< postOtrBroadcast zusr zcon val' message
 
 postOtrBroadcastH ::
-  Member GundeckAccess r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ::: ConnId ::: Public.OtrFilterMissing ::: JsonRequest Public.NewOtrMessage ->
   Galley r Response
 postOtrBroadcastH (zusr ::: zcon ::: val ::: req) = do
@@ -1042,7 +1052,7 @@ postOtrBroadcastH (zusr ::: zcon ::: val ::: req) = do
   handleOtrResult =<< postOtrBroadcast zusr zcon val' message
 
 postOtrBroadcast ::
-  Member GundeckAccess r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ->
   ConnId ->
   Public.OtrFilterMissing ->
@@ -1062,7 +1072,7 @@ allowOtrFilterMissingInBody val (NewOtrMessage _ _ _ _ _ _ mrepmiss) = case mrep
 
 -- | bots are not supported on broadcast
 postNewOtrBroadcast ::
-  Member GundeckAccess r =>
+  Members '[BrigAccess, GundeckAccess] r =>
   UserId ->
   Maybe ConnId ->
   OtrFilterMissing ->
@@ -1079,7 +1089,7 @@ postNewOtrBroadcast usr con val msg = do
     pushSome (catMaybes toUsers)
 
 postNewOtrMessage ::
-  Members '[BotAccess, ExternalAccess, GundeckAccess] r =>
+  Members '[BotAccess, BrigAccess, ExternalAccess, GundeckAccess] r =>
   UserType ->
   UserId ->
   Maybe ConnId ->
@@ -1135,7 +1145,7 @@ newMessage qusr con qcnv msg now (m, c, t) ~(toBots, toUsers) =
            in (toBots, p : toUsers)
 
 updateConversationName ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   Qualified ConvId ->
@@ -1151,7 +1161,7 @@ updateConversationName zusr zcon qcnv convRename = do
     convRename
 
 updateUnqualifiedConversationName ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   UserId ->
   ConnId ->
   ConvId ->
@@ -1163,7 +1173,7 @@ updateUnqualifiedConversationName zusr zcon cnv rename = do
   updateLocalConversationName lusr zcon lcnv rename
 
 updateLocalConversationName ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -1176,7 +1186,7 @@ updateLocalConversationName lusr zcon lcnv convRename = do
     else Nothing <$ Data.deleteConversation (tUnqualified lcnv)
 
 updateLiveLocalConversationName ::
-  Members '[BrigAccess, ExternalAccess, FederatorAccess, FireAndForget, GundeckAccess] r =>
+  Members UpdateConversationActions r =>
   Local UserId ->
   ConnId ->
   Local ConvId ->
@@ -1359,6 +1369,7 @@ data CheckedOtrRecipients
 
 -- | bots are not supported on broadcast
 withValidOtrBroadcastRecipients ::
+  Member BrigAccess r =>
   UserId ->
   ClientId ->
   OtrRecipients ->
@@ -1403,6 +1414,7 @@ withValidOtrBroadcastRecipients usr clt rcps val now go = withBindingTeam usr $ 
       pure (mems ^. teamMembers)
 
 withValidOtrRecipients ::
+  Member BrigAccess r =>
   UserType ->
   UserId ->
   ClientId ->
@@ -1429,6 +1441,7 @@ withValidOtrRecipients utype usr clt cnv rcps val now go = do
       handleOtrResponse utype usr clt rcps localMembers clts val now go
 
 handleOtrResponse ::
+  Member BrigAccess r =>
   -- | Type of proposed sender (user / bot)
   UserType ->
   -- | Proposed sender (user)
