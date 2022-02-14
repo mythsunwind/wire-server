@@ -700,23 +700,12 @@ instance ToSchema ConvTeamInfo where
       (description ?~ "Team information")
       $ ConvTeamInfo
         <$> cnvTeamId .= field "teamid" schema
-        <* const ()
-          .= ( fieldWithDocModifier
-                 "managed"
-                 (description ?~ "(Not parsed any more) Whether this is a managed team conversation")
-                 (c (False :: Bool))
-             )
-    where
-      c :: ToJSON a => a -> ValueSchema SwaggerDoc ()
-      c val = mkSchema mempty (const (pure ())) (const (pure (toJSON val)))
 
 modelTeamInfo :: Doc.Model
 modelTeamInfo = Doc.defineModel "TeamInfo" $ do
   Doc.description "Team information"
   Doc.property "teamid" Doc.bytes' $
     Doc.description "Team ID"
-  Doc.property "managed" Doc.bool' $
-    Doc.description "Is this a managed team conversation?"
 
 --------------------------------------------------------------------------------
 -- invite

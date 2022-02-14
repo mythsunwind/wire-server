@@ -77,9 +77,7 @@ modelTeamConversation = Doc.defineModel "TeamConversation" $ do
 instance ToJSON TeamConversation where
   toJSON t =
     object
-      [ "conversation" .= _conversationId t,
-        -- FUTUREWORK: get rid of the "managed" field in the next version of the API
-        "managed" .= False
+      [ "conversation" .= _conversationId t
       ]
 
 instance FromJSON TeamConversation where
