@@ -73,8 +73,6 @@ import Wire.API.Team.LegalHold (LegalholdProtectee (LegalholdPlusFederationNotIm
 -- Group conversations
 
 -- | The public-facing endpoint for creating group conversations.
---
--- See Note [managed conversations].
 createGroupConversation ::
   Members
     '[ ConversationStore,
