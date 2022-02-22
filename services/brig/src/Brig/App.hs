@@ -59,8 +59,11 @@ module Brig.App
     -- * App Monad
     AppT,
     AppIO,
+    liftAppT,
     runAppT,
     runAppResourceT,
+    CanonicalEffs,
+    canonicalToIO,
     forkAppIO,
     locationOf,
     viewFederationDomain,
@@ -133,6 +136,10 @@ import qualified System.Logger.Class as LC
 import qualified System.Logger.Extended as Log
 import Util.Options
 import Wire.API.User.Identity (Email)
+
+
+import Polysemy
+import Polysemy.Final
 
 schemaVersion :: Int32
 schemaVersion = 66
@@ -419,13 +426,13 @@ initCredentials secretFile = do
   dat <- loadSecret secretFile
   return $ either (\e -> error $ "Could not load secrets from " ++ show secretFile ++ ": " ++ e) id dat
 
-userTemplates :: Monad m => Maybe Locale -> AppT r m (Locale, UserTemplates)
+userTemplates :: Maybe Locale -> AppT r (Locale, UserTemplates)
 userTemplates l = forLocale l <$> view usrTemplates
 
-providerTemplates :: Monad m => Maybe Locale -> AppT r m (Locale, ProviderTemplates)
+providerTemplates :: Maybe Locale -> AppT r (Locale, ProviderTemplates)
 providerTemplates l = forLocale l <$> view provTemplates
 
-teamTemplates :: Monad m => Maybe Locale -> AppT r m (Locale, TeamTemplates)
+teamTemplates :: Maybe Locale -> AppT r (Locale, TeamTemplates)
 teamTemplates l = forLocale l <$> view tmTemplates
 
 closeEnv :: Env -> IO ()
@@ -437,73 +444,85 @@ closeEnv e = do
 
 -------------------------------------------------------------------------------
 -- App Monad
-newtype AppT r m a = AppT
-  { unAppT :: ReaderT Env m a
+newtype AppT r a = AppT
+  { unAppT :: Member (Final IO) r => ReaderT Env (Sem r) a
   }
-  deriving newtype
-    ( Functor,
-      Applicative,
-      Monad,
-      MonadIO,
-      MonadThrow,
-      MonadCatch,
-      MonadMask,
-      MonadReader Env
-    )
-  deriving
-    ( Semigroup,
-      Monoid
-    )
-    via (Ap (AppT r m) a)
 
-type AppIO r = AppT r IO
+instance Functor (AppT r)
+instance Applicative (AppT r)
+instance Monad (AppT r)
+instance MonadIO (AppT r)
+instance MonadThrow (AppT r)
+instance MonadCatch (AppT r)
+instance MonadMask (AppT r)
+instance MonadReader Env (AppT r)
 
-instance MonadIO m => MonadLogger (AppT r m) where
+  -- deriving
+  --   ( Semigroup,
+  --     Monoid
+  --   )
+  --   via (Ap (AppT r) a)
+
+
+
+type AppIO r = AppT r
+
+instance MonadLogger (AppT r) where
   log l m = do
     g <- view applog
     r <- view requestId
     Log.log g l $ field "request" (unRequestId r) ~~ m
 
-instance MonadIO m => MonadLogger (ExceptT err (AppT r m)) where
-  log l m = lift (LC.log l m)
+instance MonadLogger (ExceptT err (AppT r)) where
+  log l m = lift $ LC.log l m
 
-instance (Monad m, MonadIO m) => MonadHttp (AppT r m) where
+instance MonadHttp (AppT r) where
   handleRequestWithCont req handler = do
     manager <- view httpManager
     liftIO $ withResponse req manager handler
 
-instance MonadIO m => MonadZAuth (AppT r m) where
+instance MonadZAuth (AppT r) where
   liftZAuth za = view zauthEnv >>= \e -> runZAuth e za
 
-instance MonadIO m => MonadZAuth (ExceptT err (AppT r m)) where
+instance MonadZAuth (ExceptT err (AppT r)) where
   liftZAuth = lift . liftZAuth
 
-instance (MonadThrow m, MonadCatch m, MonadIO m) => MonadClient (AppT r m) where
+instance MonadClient (AppT r) where
   liftClient m = view casClient >>= \c -> runClient c m
   localState f = local (over casClient f)
 
 instance MonadIndexIO (AppIO r) where
   liftIndexIO m = view indexEnv >>= \e -> runIndexIO e m
 
-instance (MonadIndexIO (AppT r m), Monad m) => MonadIndexIO (ExceptT err (AppT r m)) where
+instance (MonadIndexIO (AppT r)) => MonadIndexIO (ExceptT err (AppT r)) where
   liftIndexIO m = view indexEnv >>= \e -> runIndexIO e m
 
-instance Monad m => HasRequestId (AppT r m) where
+instance HasRequestId (AppT r) where
   getRequestId = view requestId
 
-instance MonadUnliftIO m => MonadUnliftIO (AppT r m) where
-  withRunInIO inner =
-    AppT . ReaderT $ \r ->
-      withRunInIO $ \run ->
-        inner (run . flip runReaderT r . unAppT)
+-- TODO(sandy): Remove this because it's against the spirit of polysemy.
+canonicalToIO :: Env -> AppT CanonicalEffs a -> IO a
+canonicalToIO env app = runFinal $ runAppT env app
 
-runAppT :: Env -> AppT r m a -> m a
+liftAppT :: Sem r a -> AppT r a
+liftAppT sem = AppT $ lift sem
+
+
+-- instance MonadUnliftIO (AppT r) where
+--   withRunInIO inner = undefined
+--     -- AppT $ ReaderT $ \r ->
+--     --   withRunInIO $ \run ->
+--     --     inner (run . flip runReaderT r . unAppT)
+
+type CanonicalEffs = '[Final IO]
+
+runAppT :: Member (Final IO) r => Env -> AppT r a -> Sem r a
 runAppT e (AppT ma) = runReaderT ma e
 
 runAppResourceT :: ResourceT (AppIO r) a -> (AppIO r) a
 runAppResourceT ma = do
   e <- ask
-  liftIO . runResourceT $ transResourceT (runAppT e) ma
+  liftIO . runResourceT $ undefined -- transResourceT(runAppT e) ma
 
 forkAppIO :: Maybe UserId -> (AppIO r) a -> (AppIO r) ()
 forkAppIO u ma = do
@@ -513,7 +532,7 @@ forkAppIO u ma = do
   let logErr e = Log.err g $ request r ~~ user u ~~ msg (show e)
   void . liftIO . forkIO $
     either logErr (const $ return ())
-      =<< runExceptT (syncIO $ runAppT a ma)
+      =<< runExceptT (syncIO $ undefined) -- runAppT a ma)
   where
     request = field "request" . unRequestId
     user = maybe id (field "user" . toByteString)

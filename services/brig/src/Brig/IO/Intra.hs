@@ -279,7 +279,7 @@ notifyUserDeletionRemotes deleted = do
           whenLeft eitherFErr $
             logFederationError (tDomain uids)
 
-    logFederationError :: Domain -> FederationError -> AppT r IO ()
+    logFederationError :: Domain -> FederationError -> AppT r ()
     logFederationError domain fErr =
       Log.err $
         Log.msg ("Federation error while notifying remote backends of a user deletion." :: ByteString)
@@ -367,10 +367,10 @@ notify ::
   -- | Origin device connection, if any.
   Maybe ConnId ->
   -- | Users to notify.
-  IO (List1 UserId) ->
+  AppIO r (List1 UserId) ->
   (AppIO r) ()
 notify events orig route conn recipients = forkAppIO (Just orig) $ do
-  rs <- liftIO recipients
+  rs <- recipients
   push events rs orig route conn
 
 notifySelf ::
@@ -395,9 +395,8 @@ notifyContacts ::
   Maybe ConnId ->
   (AppIO r) ()
 notifyContacts events orig route conn = do
-  env <- ask
+  -- TODO(sandy): We are no longer roundtripping to IO, but that should be fine
   notify events orig route conn $
-    runAppT env $
       list1 orig <$> liftA2 (++) contacts teamContacts
   where
     contacts :: (AppIO r) [UserId]

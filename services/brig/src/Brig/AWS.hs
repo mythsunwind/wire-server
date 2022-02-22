@@ -253,11 +253,11 @@ execCatch e cmd =
       AWST.send cmd
 
 exec ::
-  (AWSRequest a, AWS.HasEnv r, MonadUnliftIO m, MonadCatch m, MonadThrow m, MonadIO m) =>
+  (AWSRequest a, AWS.HasEnv r, MonadCatch m, MonadThrow m, MonadIO m) =>
   r ->
   a ->
   m (Rs a)
-exec e cmd = execCatch e cmd >>= either (throwM . GeneralError) return
+exec e cmd = undefined -- execCatch e cmd >>= either (throwM . GeneralError) return
 
 canRetry :: MonadIO m => Either AWS.Error a -> m Bool
 canRetry (Right _) = pure False

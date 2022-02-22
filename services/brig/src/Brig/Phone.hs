@@ -99,9 +99,9 @@ sendCall call = unless (isTestPhone $ Nexmo.callTo call) $ do
                  Nexmo.CallInternal -> True
                  _ -> False
            ]
-    unreachable :: Nexmo.CallErrorResponse -> AppT r IO ()
+    unreachable :: Nexmo.CallErrorResponse -> AppT r ()
     unreachable ex = warn (toException ex) >> throwM PhoneNumberUnreachable
-    barred :: Nexmo.CallErrorResponse -> AppT r IO ()
+    barred :: Nexmo.CallErrorResponse -> AppT r ()
     barred ex = warn (toException ex) >> throwM PhoneNumberBarred
     warn ex =
       Log.warn $
@@ -179,9 +179,9 @@ sendSms loc SMSMessage {..} = unless (isTestPhone smsTo) $ do
                  20503 -> True -- Temporarily Unavailable
                  _ -> False
            ]
-    unreachable :: Twilio.ErrorResponse -> AppT r IO ()
+    unreachable :: Twilio.ErrorResponse -> AppT r ()
     unreachable ex = warn (toException ex) >> throwM PhoneNumberUnreachable
-    barred :: Twilio.ErrorResponse -> AppT r IO ()
+    barred :: Twilio.ErrorResponse -> AppT r ()
     barred ex = warn (toException ex) >> throwM PhoneNumberBarred
     warn ex =
       Log.warn $
