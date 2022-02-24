@@ -48,6 +48,7 @@ import Brig.Types.User
 import Brig.Types.User.Auth (SsoLogin (..))
 import Control.Monad.Except
 import Data.ByteString.Conversion
+import Data.Code as Code
 import Data.Handle (Handle (fromHandle))
 import Data.Id (Id (Id), TeamId, UserId)
 import Data.Misc (PlainTextPassword)
@@ -319,14 +320,16 @@ ensureReAuthorised ::
   (HasCallStack, MonadSparToBrig m) =>
   Maybe UserId ->
   Maybe PlainTextPassword ->
+  Maybe Code.Value ->
+  Maybe VerificationAction ->
   m ()
-ensureReAuthorised Nothing _ = throwSpar SparMissingZUsr
-ensureReAuthorised (Just uid) secret = do
+ensureReAuthorised Nothing _ _ _ = throwSpar SparMissingZUsr
+ensureReAuthorised (Just uid) secret mbCode mbAction = do
   resp <-
     call $
       method GET
         . paths ["/i/users", toByteString' uid, "reauthenticate"]
-        . json (ReAuthUser secret)
+        . json (ReAuthUser secret mbCode mbAction)
   let sCode = statusCode resp
   if
       | sCode == 200 ->

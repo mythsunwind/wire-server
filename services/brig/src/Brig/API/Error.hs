@@ -202,6 +202,7 @@ authError AuthPendingInvitation = StdError accountPending
 
 reauthError :: ReAuthError -> Error
 reauthError ReAuthMissingPassword = StdError (errorDescriptionTypeToWai @MissingAuth)
+reauthError ReAuth2FaFailed = error "todo(leif)"
 reauthError (ReAuthError e) = authError e
 
 zauthError :: ZAuth.Failure -> Error
