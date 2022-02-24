@@ -33,6 +33,7 @@ import qualified Brig.User.Auth as Auth
 import qualified Brig.User.Auth.Cookie as Auth
 import qualified Brig.ZAuth as ZAuth
 import Control.Error (catchE)
+import Control.Monad.Trans.Except (throwE)
 import qualified Data.ByteString as BS
 import Data.ByteString.Conversion
 import Data.Either.Combinators (leftToMaybe, rightToMaybe)
@@ -235,7 +236,9 @@ reAuthUser uid body = do
     Just action ->
       Auth.verifyCode (reAuthCode body) action uid
         `catchE` \case
-          _ -> error "todo(leif): map to reauth errors"
+          VerificationCodeNoPendingCode -> throwE $ reauthError ReAuthNoPendingCode
+          VerificationCodeRequired -> throwE $ reauthError ReAuthVerificationCodeRequired
+          VerificationCodeNoEmail -> throwE $ reauthError ReAuthNoEmail
     Nothing -> pure ()
 
 loginH :: JsonRequest Public.Login ::: Bool ::: JSON -> (Handler r) Response
