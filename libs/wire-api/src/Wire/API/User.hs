@@ -141,7 +141,7 @@ import GHC.TypeLits (KnownNat, Nat)
 import qualified Generics.SOP as GSOP
 import Imports
 import qualified SAML2.WebSSO as SAML
-import Servant (FromHttpApiData (..), type (.++))
+import Servant (FromHttpApiData (..), ToHttpApiData (..), type (.++))
 import qualified Test.QuickCheck as QC
 import Wire.API.Arbitrary (Arbitrary (arbitrary), GenericUniform (..))
 import Wire.API.ErrorDescription
@@ -1195,6 +1195,9 @@ instance S.ToParamSchema VerificationAction where
 
 instance FromHttpApiData VerificationAction where
   parseUrlPiece = maybeToEither "Invalid verification action" . fromByteString . cs
+
+instance ToHttpApiData VerificationAction where
+  toQueryParam a = cs (toByteString' a)
 
 data SendVerificationCode = SendVerificationCode
   { svcAction :: VerificationAction,
