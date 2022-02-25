@@ -30,8 +30,10 @@ import Brig.API.Error
 import Brig.API.Handler
 import Brig.API.Types
 import qualified Brig.API.User as API
+import qualified Brig.API.User as Api
 import Brig.API.Util (validateHandle)
 import Brig.App
+import qualified Brig.Code as Code
 import qualified Brig.Data.Client as Data
 import qualified Brig.Data.Connection as Data
 import qualified Brig.Data.User as Data
@@ -83,12 +85,14 @@ import Wire.API.User.RichInfo
 
 servantSitemap :: ServerT BrigIRoutes.API (Handler r)
 servantSitemap =
-  Brig.User.EJPD.ejpdRequest
-    :<|> getAccountFeatureConfig
-    :<|> putAccountFeatureConfig
-    :<|> deleteAccountFeatureConfig
-    :<|> getConnectionsStatusUnqualified
-    :<|> getConnectionsStatus
+  ( Brig.User.EJPD.ejpdRequest
+      :<|> getAccountFeatureConfig
+      :<|> putAccountFeatureConfig
+      :<|> deleteAccountFeatureConfig
+      :<|> getConnectionsStatusUnqualified
+      :<|> getConnectionsStatus
+  )
+    :<|> getVerificationCode
 
 -- | Responds with 'Nothing' if field is NULL in existing user or user does not exist.
 getAccountFeatureConfig :: UserId -> (Handler r) ApiFt.TeamFeatureStatusNoConfig
@@ -106,6 +110,17 @@ deleteAccountFeatureConfig uid =
 
 swaggerDocsAPI :: Servant.Server BrigIRoutes.SwaggerDocsAPI
 swaggerDocsAPI = swaggerSchemaUIServer BrigIRoutes.swaggerDoc
+
+getVerificationCode :: UserId -> VerificationAction -> (Handler r) (Maybe Code.Value)
+getVerificationCode uid action = do
+  user <- lift $ Api.lookupUser NoPendingInvitations uid
+  maybe (pure Nothing) (lookupCode action) (userEmail =<< user)
+  where
+    lookupCode :: VerificationAction -> Email -> (Handler r) (Maybe Code.Value)
+    lookupCode a e = do
+      key <- Code.mkKey (Code.ForEmail e)
+      code <- Code.lookup key (Code.scopeFromAction a)
+      pure $ Code.codeValue <$> code
 
 ---------------------------------------------------------------------------
 -- Sitemap (wai-route)

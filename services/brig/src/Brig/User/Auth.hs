@@ -157,11 +157,11 @@ verifyCode mbCode action uid = do
         unless codeValid $ throwE VerificationCodeNoPendingCode
       (Nothing, _) -> throwE VerificationCodeRequired
       (_, Nothing) -> throwE VerificationCodeNoEmail
-
-getEmailAndTeamId :: UserId -> ExceptT e (AppIO r) (Maybe Email, Maybe TeamId)
-getEmailAndTeamId u = lift $ do
-  mbAccount <- Data.lookupAccount u
-  pure (userEmail <$> accountUser =<< mbAccount, userTeam <$> accountUser =<< mbAccount)
+  where
+    getEmailAndTeamId :: UserId -> ExceptT e (AppIO r) (Maybe Email, Maybe TeamId)
+    getEmailAndTeamId u = lift $ do
+      mbAccount <- Data.lookupAccount u
+      pure (userEmail <$> accountUser =<< mbAccount, userTeam <$> accountUser =<< mbAccount)
 
 loginFailedWith :: LoginError -> UserId -> ExceptT LoginError (AppIO r) ()
 loginFailedWith e uid = decrRetryLimit uid >> throwE e

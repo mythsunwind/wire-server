@@ -52,6 +52,7 @@ import Data.Code as Code
 import Data.Handle (Handle (fromHandle))
 import Data.Id (Id (Id), TeamId, UserId)
 import Data.Misc (PlainTextPassword)
+import qualified Data.Text.Lazy as Lazy
 import Imports
 import Network.HTTP.Types.Method
 import qualified Network.Wai.Utilities.Error as Wai
@@ -330,14 +331,15 @@ ensureReAuthorised (Just uid) secret mbCode mbAction = do
       method GET
         . paths ["/i/users", toByteString' uid, "reauthenticate"]
         . json (ReAuthUser secret mbCode mbAction)
-  let sCode = statusCode resp
-  if
-      | sCode == 200 ->
-        pure ()
-      | sCode == 403 ->
-        throwSpar SparReAuthRequired
-      | otherwise ->
-        rethrow "brig" resp
+  case (statusCode resp, errorLabel resp) of
+    (200, _) -> pure ()
+    (403, Just "code-authentication-required") -> throwSpar SparReAuthCodeAuthRequired
+    (403, Just "code-authentication-failed") -> throwSpar SparReAuthCodeAuthFailed
+    (403, _) -> throwSpar SparReAuthRequired
+    (_, _) -> rethrow "brig" resp
+  where
+    errorLabel :: ResponseLBS -> Maybe Lazy.Text
+    errorLabel = fmap Wai.label . responseJsonMaybe
 
 -- | Get persistent cookie from brig and redirect user past login process.
 --

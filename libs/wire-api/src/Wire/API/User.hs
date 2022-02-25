@@ -1,6 +1,6 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StrictData #-}
 
 -- This file is part of the Wire Server implementation.
 --
@@ -109,11 +109,13 @@ import Control.Error.Safe (rightMay)
 import Control.Lens (over, view, (.~), (?~))
 import Data.Aeson (FromJSON (..), ToJSON (..))
 import qualified Data.Aeson.Types as A
+import qualified Data.Attoparsec.ByteString as Parser
 import Data.ByteString.Conversion
 import qualified Data.CaseInsensitive as CI
 import qualified Data.Code as Code
 import qualified Data.Currency as Currency
 import Data.Domain (Domain (Domain))
+import Data.Either.Extra (maybeToEither)
 import Data.Handle (Handle)
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.HashMap.Strict.InsOrd as InsOrdHashMap
@@ -126,9 +128,12 @@ import Data.Qualified
 import Data.Range
 import Data.SOP
 import Data.Schema
+import Data.String.Conversions (cs)
 import qualified Data.Swagger as S
 import qualified Data.Swagger.Build.Api as Doc
+import qualified Data.Text as T
 import Data.Text.Ascii
+import qualified Data.Text.Encoding as T
 import Data.UUID (UUID, nil)
 import qualified Data.UUID as UUID
 import Deriving.Swagger
@@ -136,7 +141,7 @@ import GHC.TypeLits (KnownNat, Nat)
 import qualified Generics.SOP as GSOP
 import Imports
 import qualified SAML2.WebSSO as SAML
-import Servant (type (.++))
+import Servant (FromHttpApiData (..), type (.++))
 import qualified Test.QuickCheck as QC
 import Wire.API.Arbitrary (Arbitrary (arbitrary), GenericUniform (..))
 import Wire.API.ErrorDescription
@@ -1171,6 +1176,25 @@ instance ToSchema VerificationAction where
         [ element "generate_scim_token" GenerateScimToken,
           element "login" Login
         ]
+
+instance ToByteString VerificationAction where
+  builder GenerateScimToken = "generate_scim_token"
+  builder Login = "login"
+
+instance FromByteString VerificationAction where
+  parser =
+    Parser.takeByteString >>= \b ->
+      case T.decodeUtf8' b of
+        Right "login" -> pure Login
+        Right "generate_scim_token" -> pure GenerateScimToken
+        Right t -> fail $ "Invalid VerificationAction: " <> T.unpack t
+        Left e -> fail $ "Invalid VerificationAction: " <> show e
+
+instance S.ToParamSchema VerificationAction where
+  toParamSchema _ = S.toParamSchema (Proxy @Text)
+
+instance FromHttpApiData VerificationAction where
+  parseUrlPiece = maybeToEither "Invalid verification action" . fromByteString . cs
 
 data SendVerificationCode = SendVerificationCode
   { svcAction :: VerificationAction,

@@ -28,6 +28,7 @@ module Wire.API.Routes.Internal.Brig
 where
 
 import Control.Lens ((.~))
+import qualified Data.Code as Code
 import Data.Id as Id
 import Data.Swagger (HasInfo (info), HasTitle (title), Swagger)
 import Imports hiding (head)
@@ -40,6 +41,7 @@ import Wire.API.Connection
 import Wire.API.Routes.Internal.Brig.Connection
 import Wire.API.Routes.Internal.Brig.EJPD
 import qualified Wire.API.Team.Feature as ApiFt
+import Wire.API.User (VerificationAction)
 
 type EJPDRequest =
   Summary
@@ -109,6 +111,15 @@ type GetAllConnections =
     :> ReqBody '[Servant.JSON] ConnectionsStatusRequestV2
     :> Post '[Servant.JSON] [ConnectionStatusV2]
 
+type GetVerificationCode =
+  Summary "Get verification code for a given email and action"
+    :> "i"
+    :> "users"
+    :> Capture "uid" UserId
+    :> "verification-code"
+    :> Capture "action" VerificationAction
+    :> Get '[Servant.JSON] (Maybe Code.Value)
+
 type API =
   "i"
     :> ( EJPDRequest
@@ -118,6 +129,7 @@ type API =
            :<|> GetAllConnectionsUnqualified
            :<|> GetAllConnections
        )
+    :<|> GetVerificationCode
 
 type SwaggerDocsAPI = "api" :> "internal" :> SwaggerSchemaUI "swagger-ui" "swagger.json"
 
