@@ -41,6 +41,7 @@ import Bilge.Retry (httpHandlers)
 import Brig.App
 import Brig.Budget
 import Brig.Types
+import Cassandra (MonadClient)
 import Control.Lens (view)
 import Control.Monad.Catch
 import Control.Retry
@@ -55,7 +56,6 @@ import Ropes.Twilio (LookupDetail (..))
 import qualified Ropes.Twilio as Twilio
 import qualified System.Logger.Class as Log
 import System.Logger.Message (field, msg, val, (~~))
-import Cassandra (MonadClient)
 
 -------------------------------------------------------------------------------
 -- Sending SMS and Voice Calls
@@ -74,23 +74,24 @@ data PhoneException
 
 instance Exception PhoneException
 
-sendCall :: forall r. Nexmo.Call -> AppIO r ()
+sendCall :: Nexmo.Call -> AppIO r ()
 sendCall call = unless (isTestPhone $ Nexmo.callTo call) $ do
   m <- view httpManager
   cred <- view nexmoCreds
-  withCallBudget (Nexmo.callTo call) $ do
-    r <-
-      liftIO . try @_ @Nexmo.CallErrorResponse . recovering x3 nexmoHandlers $
-        const $
-          Nexmo.sendCall cred m call
-    case r of
-      Left ex -> case Nexmo.caStatus ex of
-        Nexmo.CallDestinationNotPermitted -> unreachable ex
-        Nexmo.CallInvalidDestinationAddress -> unreachable ex
-        Nexmo.CallUnroutable -> unreachable ex
-        Nexmo.CallDestinationBarred -> barred ex
-        _ -> throwM ex
-      Right _ -> return ()
+  wrapClient $
+    withCallBudget (Nexmo.callTo call) $ do
+      r <-
+        liftIO . try @_ @Nexmo.CallErrorResponse . recovering x3 nexmoHandlers $
+          const $
+            Nexmo.sendCall cred m call
+      case r of
+        Left ex -> case Nexmo.caStatus ex of
+          Nexmo.CallDestinationNotPermitted -> unreachable ex
+          Nexmo.CallInvalidDestinationAddress -> unreachable ex
+          Nexmo.CallUnroutable -> unreachable ex
+          Nexmo.CallDestinationBarred -> barred ex
+          _ -> throwM ex
+        Right _ -> return ()
   where
     nexmoHandlers =
       httpHandlers
@@ -100,9 +101,10 @@ sendCall call = unless (isTestPhone $ Nexmo.callTo call) $ do
                  Nexmo.CallInternal -> True
                  _ -> False
            ]
-    unreachable :: Nexmo.CallErrorResponse -> AppT r IO ()
+    -- unreachable :: Nexmo.CallErrorResponse -> AppT r IO ()
     unreachable ex = warn (toException ex) >> throwM PhoneNumberUnreachable
-    barred :: Nexmo.CallErrorResponse -> AppT r IO ()
+    -- barred :: Nexmo.CallErrorResponse -> AppT r IO ()
+    barred :: Nexmo.CallErrorResponse -> m ()
     barred ex = warn (toException ex) >> throwM PhoneNumberBarred
     warn ex =
       Log.warn $
@@ -113,25 +115,26 @@ sendCall call = unless (isTestPhone $ Nexmo.callTo call) $ do
 sendSms :: forall r. Locale -> SMSMessage -> (AppIO r) ()
 sendSms loc SMSMessage {..} = unless (isTestPhone smsTo) $ do
   m <- view httpManager
-  withSmsBudget smsTo $ do
-    -- We try Nexmo first (cheaper and specialised to SMS)
-    f <- (sendNexmoSms m *> pure Nothing) `catches` nexmoFailed
-    for_ f $ \ex -> do
-      warn ex
-      r <- try @_ @Twilio.ErrorResponse $ sendTwilioSms m
-      case r of
-        Left ex' -> case Twilio.errStatus ex' of
-          -- Invalid "To" number for SMS
-          14101 -> unreachable ex'
-          -- 'To' number is not a valid mobile number
-          21614 -> unreachable ex'
-          -- "To" number is not currently reachable
-          21612 -> unreachable ex'
-          -- Customer replied with "STOP"
-          21610 -> barred ex'
-          -- A real problem
-          _ -> throwM ex'
-        Right () -> return ()
+  wrapClient $
+    withSmsBudget smsTo $ do
+      -- We try Nexmo first (cheaper and specialised to SMS)
+      f <- (sendNexmoSms m $> Nothing) `catches` nexmoFailed
+      for_ f $ \ex -> do
+        warn ex
+        r <- try @_ @Twilio.ErrorResponse $ sendTwilioSms m
+        case r of
+          Left ex' -> case Twilio.errStatus ex' of
+            -- Invalid "To" number for SMS
+            14101 -> unreachable ex'
+            -- 'To' number is not a valid mobile number
+            21614 -> unreachable ex'
+            -- "To" number is not currently reachable
+            21612 -> unreachable ex'
+            -- Customer replied with "STOP"
+            21610 -> barred ex'
+            -- A real problem
+            _ -> throwM ex'
+          Right () -> return ()
   where
     sendNexmoSms :: Manager -> (AppIO r) ()
     sendNexmoSms mgr = do
@@ -224,10 +227,10 @@ smsBudget =
       budgetValue = 5 -- # of SMS within timeout
     }
 
-withSmsBudget :: Text -> m a -> (AppIO r) a
+withSmsBudget :: MonadClient m => Text -> m a -> m a
 withSmsBudget phone go = do
   let k = BudgetKey ("sms#" <> phone)
-  r <- wrapClient $ withBudget k smsBudget go
+  r <- withBudget k smsBudget go
   case r of
     BudgetExhausted t -> do
       Log.info $
@@ -252,10 +255,10 @@ callBudget =
       budgetValue = 2 -- # of voice calls within timeout
     }
 
-withCallBudget :: MonadClient m => Text -> m a -> (AppIO r) a
+withCallBudget :: MonadClient m => Text -> m a -> m a
 withCallBudget phone go = do
   let k = BudgetKey ("call#" <> phone)
-  r <- wrapClient $ withBudget k callBudget go
+  r <- withBudget k callBudget go
   case r of
     BudgetExhausted t -> do
       Log.info $
