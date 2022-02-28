@@ -128,6 +128,7 @@ import Brig.User.Handle
 import Brig.User.Handle.Blacklist
 import Brig.User.Phone
 import qualified Brig.User.Search.TeamSize as TeamSize
+import Cassandra
 import Control.Arrow ((&&&))
 import Control.Error
 import Control.Lens (view, (^.))
@@ -377,7 +378,7 @@ createUser new = do
       fmap join . for (userEmailKey <$> email) $ \ek -> case newUserEmailCode new of
         Nothing -> do
           timeout <- setActivationTimeout <$> view settings
-          edata <- lift $ Data.newActivation ek timeout (Just uid)
+          edata <- lift . wrapClient $ Data.newActivation ek timeout (Just uid)
           Log.info $
             field "user" (toByteString uid)
               . field "activation.key" (toByteString $ activationKey edata)
@@ -394,7 +395,7 @@ createUser new = do
       pdata <- fmap join . for (userPhoneKey <$> phone) $ \pk -> case newUserPhoneCode new of
         Nothing -> do
           timeout <- setActivationTimeout <$> view settings
-          pdata <- lift $ Data.newActivation pk timeout (Just uid)
+          pdata <- lift . wrapClient $ Data.newActivation pk timeout (Just uid)
           Log.info $
             field "user" (toByteString uid)
               . field "activation.key" (toByteString $ activationKey pdata)
@@ -605,7 +606,7 @@ changeEmail u email allowScim = do
         )
         $ throwE EmailManagedByScim
       timeout <- setActivationTimeout <$> view settings
-      act <- lift $ Data.newActivation ek timeout (Just u)
+      act <- lift . wrapClient $ Data.newActivation ek timeout (Just u)
       return $ ChangeEmailNeedsActivation (usr, act, em)
 
 -------------------------------------------------------------------------------
@@ -630,7 +631,7 @@ changePhone u phone = do
   prefixExcluded <- lift . wrapClient $ Blacklist.existsAnyPrefix canonical
   when prefixExcluded $
     throwE BlacklistedNewPhone
-  act <- lift $ Data.newActivation pk timeout (Just u)
+  act <- lift . wrapClient $ Data.newActivation pk timeout (Just u)
   return (act, canonical)
 
 -------------------------------------------------------------------------------
@@ -668,7 +669,7 @@ removePhone uid conn = do
 -------------------------------------------------------------------------------
 -- Forcefully revoke a verified identity
 
-revokeIdentity :: Either Email Phone -> (AppIO r) ()
+revokeIdentity :: Either Email Phone -> AppIO r ()
 revokeIdentity key = do
   let uk = either userEmailKey userPhoneKey key
   mu <- wrapClient $ Data.lookupKey uk
@@ -679,18 +680,20 @@ revokeIdentity key = do
         Just (FullIdentity _ _) -> revokeKey u uk
         Just (EmailIdentity e) | Left e == key -> do
           revokeKey u uk
-          Data.deactivateUser u
+          wrapClient $ Data.deactivateUser u
         Just (PhoneIdentity p) | Right p == key -> do
           revokeKey u uk
-          Data.deactivateUser u
+          wrapClient $ Data.deactivateUser u
         _ -> return ()
   where
+    revokeKey :: UserId -> UserKey -> AppIO r ()
     revokeKey u uk = do
-      deleteKey uk
-      foldKey
-        (\(_ :: Email) -> Data.deleteEmail u)
-        (\(_ :: Phone) -> Data.deletePhone u)
-        uk
+      wrapClient $ deleteKey uk
+      wrapClient $
+        foldKey
+          (\(_ :: Email) -> Data.deleteEmail u)
+          (\(_ :: Phone) -> Data.deletePhone u)
+          uk
       Intra.onUserEvent u Nothing $
         foldKey
           (emailRemoved u)
@@ -748,7 +751,7 @@ activateWithCurrency tgt code usr cur = do
     field "activation.key" (toByteString key)
       . field "activation.code" (toByteString code)
       . msg (val "Activating")
-  event <- Data.activateKey key code usr
+  event <- mapExceptT wrapClient $ Data.activateKey key code usr
   case event of
     Nothing -> return ActivationPass
     Just e -> do
@@ -765,7 +768,7 @@ activateWithCurrency tgt code usr cur = do
 preverify :: ActivationTarget -> ActivationCode -> ExceptT ActivationError (AppIO r) ()
 preverify tgt code = do
   key <- mkActivationKey tgt
-  void $ Data.verifyCode key code
+  void . mapExceptT wrapClient $ Data.verifyCode key code
 
 onActivated :: ActivationEvent -> (AppIO r) (UserId, Maybe UserIdentity, Bool)
 onActivated (AccountActivated account) = do
@@ -797,7 +800,7 @@ sendActivationCode emailOrPhone loc call = case emailOrPhone of
     blacklisted <- lift . wrapClient $ Blacklist.exists ek
     when blacklisted $
       throwE (ActivationBlacklistedUserKey ek)
-    uc <- lift $ Data.lookupActivationCode ek
+    uc <- lift . wrapClient $ Data.lookupActivationCode ek
     case uc of
       Nothing -> sendVerificationEmail ek Nothing -- Fresh code request, no user
       Just (Nothing, c) -> sendVerificationEmail ek (Just c) -- Re-requesting existing code
@@ -821,8 +824,8 @@ sendActivationCode emailOrPhone loc call = case emailOrPhone of
     prefixExcluded <- lift . wrapClient $ Blacklist.existsAnyPrefix canonical
     when prefixExcluded $
       throwE (ActivationBlacklistedUserKey pk)
-    c <- lift $ fmap snd <$> Data.lookupActivationCode pk
-    p <- mkPair pk c Nothing
+    c <- lift . wrapClient $ fmap snd <$> Data.lookupActivationCode pk
+    p <- mapExceptT wrapClient $ mkPair pk c Nothing
     void . forPhoneKey pk $ \ph ->
       lift $
         if call
@@ -838,7 +841,7 @@ sendActivationCode emailOrPhone loc call = case emailOrPhone of
           dat <- Data.newActivation k timeout u
           return (activationKey dat, activationCode dat)
     sendVerificationEmail ek uc = do
-      p <- mkPair ek uc Nothing
+      p <- mapExceptT wrapClient $ mkPair ek uc Nothing
       void . forEmailKey ek $ \em ->
         lift $
           sendVerificationMail em p loc
@@ -846,7 +849,7 @@ sendActivationCode emailOrPhone loc call = case emailOrPhone of
       -- FUTUREWORK(fisx): we allow for 'PendingInvitations' here, but I'm not sure this
       -- top-level function isn't another piece of a deprecated onboarding flow?
       u <- maybe (notFound uid) return =<< lift (wrapClient $ Data.lookupUser WithPendingInvitations uid)
-      p <- mkPair ek (Just uc) (Just uid)
+      p <- mapExceptT wrapClient $ mkPair ek (Just uc) (Just uid)
       let ident = userIdentity u
           name = userDisplayName u
           loc' = loc <|> Just (userLocale u)
@@ -1084,7 +1087,10 @@ deleteAccount account@(accountUser -> user) = do
 -------------------------------------------------------------------------------
 -- Lookups
 
-lookupActivationCode :: Either Email Phone -> (AppIO r) (Maybe ActivationPair)
+lookupActivationCode ::
+  (MonadIO m, MonadClient m) =>
+  Either Email Phone ->
+  m (Maybe ActivationPair)
 lookupActivationCode emailOrPhone = do
   let uk = either userEmailKey userPhoneKey emailOrPhone
   k <- liftIO $ Data.mkActivationKey uk
@@ -1248,7 +1254,7 @@ lookupAccountsByIdentity :: Either Email Phone -> Bool -> (AppIO r) [UserAccount
 lookupAccountsByIdentity emailOrPhone includePendingInvitations = do
   let uk = either userEmailKey userPhoneKey emailOrPhone
   activeUid <- wrapClient $ Data.lookupKey uk
-  uidFromKey <- (>>= fst) <$> Data.lookupActivationCode uk
+  uidFromKey <- (>>= fst) <$> wrapClient (Data.lookupActivationCode uk)
   result <- wrapClient $ Data.lookupAccounts (nub $ catMaybes [activeUid, uidFromKey])
   if includePendingInvitations
     then pure result
