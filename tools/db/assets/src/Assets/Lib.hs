@@ -17,5 +17,62 @@
 
 module Assets.Lib where
 
+import Brig.Data.Instances
+import Cassandra as C
+import Cassandra.Settings as C
+import Data.Aeson (encode)
+import Data.Conduit
+import Data.Conduit.Combinators (mapM_E)
+import Data.Id (UserId)
+import Imports
+import qualified System.Logger as Log
+import Wire.API.User
+
+cHost :: String
+cHost = "127.0.01"
+
+cPort :: Int
+cPort = 9042
+
+cKeyspace :: C.Keyspace
+cKeyspace = C.Keyspace "brig_test"
+
 main :: IO ()
-main = putStrLn "Hello, Lib!"
+main = do
+  putStrLn "starting to read users ..."
+  logger <- initLogger
+  client <- initCas logger
+  process client
+  putStrLn "done"
+  where
+    initLogger =
+      Log.new
+        . Log.setOutput Log.StdOut
+        . Log.setFormat Nothing
+        . Log.setBufSize 0
+        $ Log.defSettings
+    initCas l =
+      C.init
+        . C.setLogger (C.mkLogger l)
+        . C.setContacts cHost []
+        . C.setPortNumber (fromIntegral cPort)
+        . C.setKeyspace cKeyspace
+        . C.setProtocolVersion C.V4
+        $ C.defSettings
+
+type UserRow = (UserId, Maybe [Asset])
+
+selectUsersAll :: C.PrepQuery C.R () UserRow
+selectUsersAll = "SELECT id, assets FROM user"
+
+readUsers :: ClientState -> ConduitM () [UserRow] IO ()
+readUsers client =
+  transPipe (runClient client) $
+    paginateC selectUsersAll (paramsP LocalQuorum () 50) x5
+
+printUser :: ConduitM [UserRow] Void IO ()
+printUser = mapM_E print
+
+process :: ClientState -> IO ()
+process client =
+  runConduit $ readUsers client .| printUser
