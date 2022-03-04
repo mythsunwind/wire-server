@@ -20,12 +20,14 @@ module Assets.Lib where
 import Brig.Data.Instances
 import Cassandra as C
 import Cassandra.Settings as C
-import Data.Aeson (encode)
+import qualified Conduit
+import Data.Aeson (Value (Bool), encode)
 import Data.Conduit
-import Data.Conduit.Combinators (mapM_E)
+import qualified Data.Conduit.Combinators as Conduit
 import Data.Id (UserId)
 import Imports
 import qualified System.Logger as Log
+import Wire.API.Asset (nilAssetKey)
 import Wire.API.User
 
 cHost :: String
@@ -70,9 +72,15 @@ readUsers client =
   transPipe (runClient client) $
     paginateC selectUsersAll (paramsP LocalQuorum () 50) x5
 
-printUser :: ConduitM [UserRow] Void IO ()
-printUser = mapM_E print
-
 process :: ClientState -> IO ()
 process client =
-  runConduit $ readUsers client .| printUser
+  runConduit $
+    readUsers client
+      .| Conduit.concat
+      .| Conduit.filter (findInvalidAssetKey . snd)
+      .| Conduit.mapM_ print
+  where
+    findInvalidAssetKey :: Maybe [Asset] -> Bool
+    findInvalidAssetKey Nothing = False
+    findInvalidAssetKey (Just assets) =
+      any (\a -> assetKey a == nilAssetKey) assets
