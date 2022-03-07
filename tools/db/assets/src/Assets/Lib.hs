@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
+
 -- This file is part of the Wire Server implementation.
 --
 -- Copyright (C) 2022 Wire Swiss GmbH <opensource@wire.com>
@@ -21,29 +23,61 @@ import Brig.Data.Instances
 import Cassandra as C
 import Cassandra.Settings as C
 import qualified Conduit
+import Control.Lens
 import Data.Aeson (Value (Bool), encode)
 import Data.Conduit
 import qualified Data.Conduit.Combinators as Conduit
 import Data.Id (UserId)
+import Data.Semigroup ((<>))
+import Data.Text.Strict.Lens
 import Imports
+import Options.Applicative
 import qualified System.Logger as Log
 import Wire.API.Asset (nilAssetKey)
 import Wire.API.User
 
-cHost :: String
-cHost = "127.0.01"
+data Opts = Opts
+  { cHost :: String,
+    cPort :: Int,
+    cKeyspace :: C.Keyspace
+  }
 
-cPort :: Int
-cPort = 9042
-
-cKeyspace :: C.Keyspace
-cKeyspace = C.Keyspace "brig_test"
+sampleParser :: Parser Opts
+sampleParser =
+  Opts
+    <$> strOption
+      ( long "cassandra-host"
+          <> short 'h'
+          <> metavar "HOST"
+          <> help "Cassandra Host"
+          <> value "localhost"
+          <> showDefault
+      )
+    <*> option
+      auto
+      ( long "cassandra-port"
+          <> short 'p'
+          <> metavar "PORT"
+          <> help "Cassandra Port"
+          <> value 9042
+          <> showDefault
+      )
+    <*> ( C.Keyspace . view packed
+            <$> strOption
+              ( long "cassandra-keyspace"
+                  <> metavar "STRING"
+                  <> help "Cassandra Keyspace"
+                  <> value "brig_test"
+                  <> showDefault
+              )
+        )
 
 main :: IO ()
 main = do
   putStrLn "starting to read users ..."
+  opts <- execParser (info (helper <*> sampleParser) desc)
   logger <- initLogger
-  client <- initCas logger
+  client <- initCas opts logger
   process client
   putStrLn "done"
   where
@@ -53,7 +87,7 @@ main = do
         . Log.setFormat Nothing
         . Log.setBufSize 0
         $ Log.defSettings
-    initCas l =
+    initCas Opts {..} l =
       C.init
         . C.setLogger (C.mkLogger l)
         . C.setContacts cHost []
@@ -61,6 +95,10 @@ main = do
         . C.setKeyspace cKeyspace
         . C.setProtocolVersion C.V4
         $ C.defSettings
+    desc =
+      header "assets"
+        <> progDesc "find invalid asset keys in cassandra brig"
+        <> fullDesc
 
 type UserRow = (UserId, Maybe [Asset])
 
